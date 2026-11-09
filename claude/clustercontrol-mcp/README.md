@@ -46,7 +46,7 @@ server in one of three ways:
 
 - **SSH tunnel.** Run `ssh -N -L 3000:127.0.0.1:3000 <user>@<controller>` and keep it open while you work.
   The plugin's default URL, `http://127.0.0.1:3000/mcp`, then reaches the server through the tunnel.
-- **Native TLS** (`clustercontrol-mcp` build `1.0.0-TBD` or later). On the controller, also set
+- **Native TLS** (`clustercontrol-mcp` build `1.0.0-246` or later). On the controller, also set
   `MCP_TLS_BIND_ADDRESS` (for example `0.0.0.0:3443`), `MCP_TLS_CERT_FILE` and `MCP_TLS_KEY_FILE` (the key
   file must not be readable by group or others). The TLS listener requires the `MCP_AUTH_TOKEN` from step 1,
   or an identity map. The server then serves TLS on that address as well, while the plain listener keeps
