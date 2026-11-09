@@ -61,10 +61,11 @@ In Claude Code:
 ```
 
 Claude Code asks for the MCP URL and the token. It stores the token in your system's credential store, not
-in a settings file. Run `/mcp` to check that `clustercontrol` is connected, then ask, for example, "Give me
-a daily review of my ClusterControl fleet."
+in a settings file. To change either later, run `/plugin configure clustercontrol-mcp@severalnines`.
 
-The server's guided procedures appear as prompts of the `clustercontrol` server in the slash-command menu.
+Run `/mcp` and check that `plugin:clustercontrol-mcp:clustercontrol` is connected, then ask, for example,
+"Give me a daily review of my ClusterControl fleet." The server's guided procedures, such as
+`sop_daily_review`, are MCP prompts: type `/` to find them in the command menu.
 
 ## Approvals and timeouts
 
@@ -75,10 +76,10 @@ request, so Claude Code keeps waiting for the longest window the server allows. 
 
 ## Troubleshooting
 
-- **`/mcp` shows the server as failed, and the controller logs a 401:** the token does not match
-  `MCP_AUTH_TOKEN`. Run `/plugin`, open the plugin, and enter the token again.
-- **Connection refused:** the SSH tunnel is not running, `cmon-mcp` is stopped, or `MCP_BIND_ADDRESS` is
-  not `127.0.0.1:3000`.
+- **`/mcp` says the server rejected the Authorization header (HTTP 401):** the token does not match
+  `MCP_AUTH_TOKEN`. Run `/plugin configure clustercontrol-mcp@severalnines` and enter it again.
+- **`/mcp` says it is unable to connect (ECONNREFUSED):** the SSH tunnel is not running, `cmon-mcp` is
+  stopped, or `MCP_BIND_ADDRESS` is not `127.0.0.1:3000`.
 - **Fewer tools than expected:** the server's profile (`MCP_PROFILE`) or read-only mode limits what it lists.
 
 ## Support
