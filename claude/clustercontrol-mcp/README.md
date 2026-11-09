@@ -48,8 +48,9 @@ server in one of three ways:
   The plugin's default URL, `http://127.0.0.1:3000/mcp`, then reaches the server through the tunnel.
 - **Native TLS** (`clustercontrol-mcp` build `1.0.0-TBD` or later). On the controller, also set
   `MCP_TLS_BIND_ADDRESS` (for example `0.0.0.0:3443`), `MCP_TLS_CERT_FILE` and `MCP_TLS_KEY_FILE` (the key
-  file must not be readable by group or others). The server then serves TLS on that address as well, while
-  the plain listener keeps serving the tunnel. Enter `https://<host>:3443/mcp` as the URL. If the
+  file must not be readable by group or others). The TLS listener requires the `MCP_AUTH_TOKEN` from step 1,
+  or an identity map. The server then serves TLS on that address as well, while the plain listener keeps
+  serving the tunnel. Enter `https://<host>:3443/mcp` as the URL. If the
   certificate comes from a private CA, start Claude Code with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` so it
   trusts that CA.
 - **TLS reverse proxy.** Put a proxy with a certificate, such as nginx, in front of `127.0.0.1:3000`, and
