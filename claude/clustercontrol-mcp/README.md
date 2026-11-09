@@ -41,10 +41,18 @@ covers every server setting, including read-only mode, deployment profiles and a
 
 ## 2. Reach the server securely
 
-The `cmon-mcp` listener speaks plain HTTP. Keep it on `127.0.0.1` and reach it in one of two ways:
+The `cmon-mcp` listener on `MCP_BIND_ADDRESS` speaks plain HTTP. Keep it on `127.0.0.1` and reach the
+server in one of three ways:
 
 - **SSH tunnel.** Run `ssh -N -L 3000:127.0.0.1:3000 <user>@<controller>` and keep it open while you work.
   The plugin's default URL, `http://127.0.0.1:3000/mcp`, then reaches the server through the tunnel.
+- **Native TLS** (`clustercontrol-mcp` build `1.0.0-246` or later). On the controller, also set
+  `MCP_TLS_BIND_ADDRESS` (for example `0.0.0.0:3443`), `MCP_TLS_CERT_FILE` and `MCP_TLS_KEY_FILE` (the key
+  file must not be readable by group or others). The TLS listener requires the `MCP_AUTH_TOKEN` from step 1,
+  or an identity map. The server then serves TLS on that address as well, while the plain listener keeps
+  serving the tunnel. Enter `https://<host>:3443/mcp` as the URL. If the
+  certificate comes from a private CA, start Claude Code with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` so it
+  trusts that CA.
 - **TLS reverse proxy.** Put a proxy with a certificate, such as nginx, in front of `127.0.0.1:3000`, and
   use its `https://<host>/mcp` URL. Turn response buffering off for `/mcp`, and set the read timeout above
   the server's approval window.
