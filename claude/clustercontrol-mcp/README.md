@@ -74,6 +74,12 @@ until an approver runs `cmon-mcp approve` on the controller, or until the approv
 (`MCP_APPROVAL_TTL`, 2 minutes by default, 30 at most) ends. The plugin gives the server 31 minutes per
 request, so Claude Code keeps waiting for the longest window the server allows. Press Esc to stop waiting.
 
+Approvals are a server setting, and they need more than the shared token above: an identity map
+(`MCP_IDENTITY_MAP_FILE`) that gives each person their own token and ClusterControl user, plus the approval
+settings. Without them, the server refuses destructive calls when approvals are on. The
+[reference manual](https://docs.severalnines.com/clustercontrol/latest/reference-manuals/clustercontrol-mcp/)
+covers the setup.
+
 ## Troubleshooting
 
 - **`/mcp` says the server rejected the Authorization header (HTTP 401):** the token does not match

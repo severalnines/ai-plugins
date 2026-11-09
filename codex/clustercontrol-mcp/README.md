@@ -66,6 +66,10 @@ until an approver runs `cmon-mcp approve` on the controller, or until the approv
 (`MCP_APPROVAL_TTL`, 2 minutes by default, 30 at most) ends. The plugin sets `tool_timeout_sec` to 1860, so
 Codex keeps waiting for the longest window the server allows.
 
+Approvals need more than a shared token: the server must also have an identity map
+(`MCP_IDENTITY_MAP_FILE`) that gives each person their own token and ClusterControl user, plus the approval
+settings. Without them, it refuses destructive calls when approvals are on.
+
 ## Troubleshooting
 
 - **401 from the server:** `CLUSTERCONTROL_MCP_TOKEN` is unset in the shell that started Codex, or does not

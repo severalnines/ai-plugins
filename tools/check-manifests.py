@@ -13,6 +13,8 @@ nothing else checks that the two plugins of one product stay in step, so this sc
 - the Claude Code server's URL is exactly one userConfig reference and its Authorization header exactly
   `Bearer` and one, each naming a declared option, and it sends no other header; the token's option is
   sensitive and has no default, so no credential sits in the repo;
+- the Codex server's literal URL is an absolute http(s) URL with no credentials, query or fragment, and plain
+  http only to loopback;
 - the Codex server reads its token from an environment variable and carries no literal token, no
   `http_headers` (sent as written) and no `headers` block (ignored by Codex, so a token there would
   silently not be sent).
@@ -24,6 +26,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
@@ -32,6 +35,10 @@ CODEX_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 # userConfig keys are letters, digits and underscores, not starting with a digit.
 USER_CONFIG_REF = re.compile(r"\$\{user_config\.([A-Za-z_][A-Za-z0-9_]*)\}")
 BEARER_REF = re.compile(r"Bearer \$\{user_config\.([A-Za-z_][A-Za-z0-9_]*)\}")
+
+# Plain http carries the bearer token in cleartext, which is acceptable only when it never leaves the machine
+# (the SSH-tunnel address).
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # MCP_APPROVAL_TTL accepts 1m to 30m. A client that gives up first cancels the approval request.
 LONGEST_APPROVAL_WINDOW_SEC = 30 * 60
@@ -142,6 +149,18 @@ def check_codex(name, folder):
         return manifest.get("version"), {}
     servers = servers_of(load_json((folder / mcp_path).resolve()))
     for server, cfg in servers.items():
+        # Codex cannot take the URL from the user, so it is a literal here and has to be checked as one.
+        url = cfg.get("url")
+        parts = urlsplit(url) if isinstance(url, str) else None
+        if not parts or parts.scheme not in ("http", "https") or not parts.hostname:
+            problem(f"{where}: server {server!r} url {url!r} must be an absolute http(s) URL")
+        else:
+            if parts.username or parts.password:
+                problem(f"{where}: server {server!r} url must not carry credentials (user:password@)")
+            if parts.query or parts.fragment:
+                problem(f"{where}: server {server!r} url must not carry a query string or fragment")
+            if parts.scheme == "http" and parts.hostname not in LOOPBACK_HOSTS:
+                problem(f"{where}: server {server!r} url uses plain http only to loopback, not {parts.hostname!r}")
         if "bearer_token" in cfg:
             problem(f"{where}: server {server!r} has a literal bearer_token; use bearer_token_env_var")
         if "headers" in cfg:

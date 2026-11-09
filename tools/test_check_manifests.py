@@ -96,6 +96,21 @@ class CheckManifestsTest(unittest.TestCase):
         self.assert_fails(codex_server(lambda s: s.update(headers={"Authorization": "Bearer planted"})),
                           "headers block")
 
+    def test_codex_missing_url(self):
+        self.assert_fails(codex_server(lambda s: s.pop("url")), "absolute http(s) URL")
+
+    def test_codex_url_with_userinfo(self):
+        self.assert_fails(codex_server(lambda s: s.update(url="https://admin:planted@cc.example.com/mcp")),
+                          "must not carry credentials")
+
+    def test_codex_url_with_query_token(self):
+        self.assert_fails(codex_server(lambda s: s.update(url="https://cc.example.com/mcp?token=planted")),
+                          "query string")
+
+    def test_codex_plain_http_to_a_remote_host(self):
+        self.assert_fails(codex_server(lambda s: s.update(url="http://cc.example.com:3000/mcp")),
+                          "plain http only to loopback")
+
     def test_codex_literal_http_headers(self):
         self.assert_fails(codex_server(lambda s: s.update(http_headers={"Authorization": "Bearer planted"})),
                           "literal http_headers")
