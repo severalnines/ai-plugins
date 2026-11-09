@@ -35,7 +35,7 @@ codex plugin add clustercontrol-mcp@severalnines
 .agents/plugins/marketplace.json    Codex marketplace "severalnines"
 claude/clustercontrol-mcp/          Claude Code plugin: asks for the URL and token at install
 codex/clustercontrol-mcp/           Codex plugin: tunnel URL, token from CLUSTERCONTROL_MCP_TOKEN
-tools/check-manifests.py            consistency checks (CI)
+tools/check-manifests.py            consistency checks (CI), with planted-defect tests beside it
 ```
 
 The two tools read different manifest and MCP formats, so each plugin has its own folder.
@@ -52,6 +52,7 @@ The two tools read different manifest and MCP formats, so each plugin has its ow
   claude plugin validate . --strict
   claude plugin validate ./claude/clustercontrol-mcp --strict
   python3 tools/check-manifests.py
+  python3 -m unittest discover -s tools -p 'test_*.py'
   ```
 
 ## License

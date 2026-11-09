@@ -21,3 +21,5 @@ jobs:
         run: claude plugin validate ./claude/clustercontrol-mcp --strict --profile directory
       - name: Cross-tool consistency
         run: python3 tools/check-manifests.py
+      - name: Consistency checker catches planted defects
+        run: python3 -m unittest discover -s tools -p 'test_*.py' -v

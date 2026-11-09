@@ -10,7 +10,9 @@ nothing else checks that the two plugins of one product stay in step, so this sc
   moved by the plugin.json version alone;
 - each pair of server definitions has the same server names and the same timeout, and that timeout outlasts
   the longest approval window cmon-mcp allows (MCP_APPROVAL_TTL is at most 30 minutes);
-- the Claude Code server takes its URL and token from userConfig, so no credential sits in the repo;
+- the Claude Code server's URL is exactly one userConfig reference and its Authorization header exactly
+  `Bearer` and one, each naming a declared option; the token's option is sensitive and has no default, so no
+  credential sits in the repo;
 - the Codex server reads its token from an environment variable and carries no literal token or `headers`
   block: Codex ignores `headers`, so a token placed there would silently not be sent.
 
@@ -18,12 +20,17 @@ Exit status: 0 when every check passes, 1 when any fails.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 CODEX_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
+
+# userConfig keys are letters, digits and underscores, not starting with a digit.
+USER_CONFIG_REF = re.compile(r"\$\{user_config\.([A-Za-z_][A-Za-z0-9_]*)\}")
+BEARER_REF = re.compile(r"Bearer \$\{user_config\.([A-Za-z_][A-Za-z0-9_]*)\}")
 
 # MCP_APPROVAL_TTL accepts 1m to 30m. A client that gives up first cancels the approval request.
 LONGEST_APPROVAL_WINDOW_SEC = 30 * 60
@@ -90,15 +97,25 @@ def check_claude(name, folder):
         problem(f"{where}: plugin.json name {manifest.get('name')!r} differs from the marketplace entry")
     options = manifest.get("userConfig", {})
     for server, cfg in servers.items():
-        url = cfg.get("url", "")
-        if not url.startswith("${user_config."):
-            problem(f"{where}: server {server!r} url must come from userConfig")
-        auth = cfg.get("headers", {}).get("Authorization", "")
-        if "${user_config." not in auth:
-            problem(f"{where}: server {server!r} Authorization header must come from userConfig")
-        for key in [k for k in options if f"${{user_config.{k}}}" in auth]:
+        # Whole-value matches, not substring tests: text beside a reference is a literal shipped in the repo.
+        url_ref = USER_CONFIG_REF.fullmatch(cfg.get("url", ""))
+        if not url_ref:
+            problem(f"{where}: server {server!r} url must be exactly ${{user_config.<option>}}")
+        elif url_ref.group(1) not in options:
+            problem(f"{where}: server {server!r} url references undeclared userConfig option {url_ref.group(1)!r}")
+        token_ref = BEARER_REF.fullmatch(cfg.get("headers", {}).get("Authorization", ""))
+        if not token_ref:
+            problem(f"{where}: server {server!r} Authorization header must be exactly Bearer ${{user_config.<option>}}")
+        elif token_ref.group(1) not in options:
+            problem(f"{where}: server {server!r} Authorization header references undeclared userConfig option "
+                    f"{token_ref.group(1)!r}")
+        else:
+            key = token_ref.group(1)
             if not options[key].get("sensitive"):
                 problem(f"{where}: userConfig {key!r} carries the token and must be sensitive")
+            # sensitive governs where the client stores the value; a default would still be published here.
+            if options[key].get("default") not in (None, ""):
+                problem(f"{where}: userConfig {key!r} carries the token and must not have a default")
         timeout = cfg.get("timeout")
         if not isinstance(timeout, int) or timeout <= LONGEST_APPROVAL_WINDOW_SEC * 1000:
             problem(f"{where}: server {server!r} timeout {timeout!r} ms must exceed {LONGEST_APPROVAL_WINDOW_SEC * 1000}")
