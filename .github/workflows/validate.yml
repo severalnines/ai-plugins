@@ -1,0 +1,23 @@
+name: Validate plugins
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Pinned so a new Claude Code release cannot change the verdict on an unchanged commit.
+      - run: npm install -g @anthropic-ai/claude-code@2.1.319
+      - name: Claude Code marketplace
+        run: claude plugin validate . --strict
+      - name: Claude Code plugin, with the directory's checks
+        run: claude plugin validate ./claude/clustercontrol-mcp --strict --profile directory
+      - name: Cross-tool consistency
+        run: python3 tools/check-manifests.py

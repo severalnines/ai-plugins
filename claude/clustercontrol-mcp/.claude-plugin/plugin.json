@@ -1,0 +1,34 @@
+{
+  "name": "clustercontrol-mcp",
+  "displayName": "ClusterControl",
+  "version": "1.0.0",
+  "description": "Connect Claude Code to the ClusterControl MCP server (cmon-mcp) to inspect, troubleshoot and operate the database clusters ClusterControl manages.",
+  "author": {
+    "name": "Severalnines",
+    "url": "https://severalnines.com/"
+  },
+  "homepage": "https://severalnines.com/clustercontrol/",
+  "repository": "https://github.com/severalnines/ai-plugins",
+  "license": "Apache-2.0",
+  "keywords": ["clustercontrol", "database", "mysql", "mariadb", "galera", "postgresql", "dba", "operations"],
+  "icon": "./icon.svg",
+  "documentationUrl": "https://docs.severalnines.com/clustercontrol/latest/reference-manuals/clustercontrol-mcp/",
+  "supportUrl": "https://support.severalnines.com/hc/en-us",
+  "privacyPolicyUrl": "https://severalnines.com/privacy/",
+  "userConfig": {
+    "mcp_url": {
+      "type": "string",
+      "title": "ClusterControl MCP URL",
+      "description": "The cmon-mcp endpoint, ending in /mcp. Keep the default when you reach the controller through an SSH tunnel; otherwise enter the https URL of your TLS reverse proxy.",
+      "required": true,
+      "default": "http://127.0.0.1:3000/mcp"
+    },
+    "mcp_token": {
+      "type": "string",
+      "title": "ClusterControl MCP token",
+      "description": "The bearer token configured on the controller: MCP_AUTH_TOKEN, or your own token when the server uses an identity map.",
+      "required": true,
+      "sensitive": true
+    }
+  }
+}

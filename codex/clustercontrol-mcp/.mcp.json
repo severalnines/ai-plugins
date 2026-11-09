@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "clustercontrol": {
+      "url": "http://127.0.0.1:3000/mcp",
+      "bearer_token_env_var": "CLUSTERCONTROL_MCP_TOKEN",
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 1860
+    }
+  }
+}

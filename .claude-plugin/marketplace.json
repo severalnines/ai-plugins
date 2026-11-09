@@ -1,0 +1,15 @@
+{
+  "name": "severalnines",
+  "owner": {
+    "name": "Severalnines",
+    "url": "https://severalnines.com/"
+  },
+  "description": "Severalnines plugins for Claude Code: connect Claude to ClusterControl.",
+  "plugins": [
+    {
+      "name": "clustercontrol-mcp",
+      "source": "./claude/clustercontrol-mcp",
+      "description": "Connect Claude Code to your ClusterControl MCP server to inspect, troubleshoot and operate your database clusters."
+    }
+  ]
+}

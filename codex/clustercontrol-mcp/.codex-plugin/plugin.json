@@ -1,0 +1,24 @@
+{
+  "name": "clustercontrol-mcp",
+  "version": "1.0.0",
+  "description": "Connect Codex to the ClusterControl MCP server (cmon-mcp) to inspect, troubleshoot and operate the database clusters ClusterControl manages.",
+  "author": {
+    "name": "Severalnines",
+    "url": "https://severalnines.com/"
+  },
+  "keywords": ["clustercontrol", "database", "mysql", "mariadb", "galera", "postgresql", "dba", "operations"],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "ClusterControl",
+    "shortDescription": "Inspect and operate ClusterControl database clusters.",
+    "longDescription": "Connects Codex to the cmon-mcp service on your ClusterControl controller, so Codex can read cluster and node health, alarms, backups, jobs and configuration, and run guided procedures such as a daily fleet review. What Codex may change, and whether a change needs a person's approval, is set by the server on the controller.",
+    "developerName": "Severalnines",
+    "category": "Databases",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Give me a daily review of my ClusterControl fleet.",
+      "Which clusters have open alarms, and what do they mean?",
+      "When did each cluster last complete a backup?"
+    ]
+  }
+}
