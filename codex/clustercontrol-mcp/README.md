@@ -48,11 +48,15 @@ Start Codex and run `/mcp` to check that `clustercontrol` is connected.
 
 ## A different URL
 
-A Codex plugin cannot ask for a URL, so this one always uses the tunnel address. If you reach the server
-another way, define the server yourself in `~/.codex/config.toml`: through the server's native TLS listener
-(`clustercontrol-mcp` build `1.0.0-TBD` or later, `MCP_TLS_BIND_ADDRESS` with a token or identity map, for
-example `https://<host>:3443/mcp`) or through a TLS reverse proxy (`https://<host>/mcp`). An entry with the same name
-replaces the plugin's definition as a whole, so give every setting, the timeout included:
+A Codex plugin cannot ask for a URL, so this one always uses the tunnel address. To reach the server
+another way, define it yourself in `~/.codex/config.toml`, with one of these URLs:
+
+- **Native TLS listener** (`clustercontrol-mcp` build `1.0.0-TBD` or later): the server's
+  `MCP_TLS_BIND_ADDRESS`, which needs a token or identity map, for example `https://<host>:3443/mcp`.
+- **TLS reverse proxy:** the proxy's address, for example `https://<host>/mcp`.
+
+An entry named `clustercontrol` replaces the plugin's definition as a whole, so give every setting, the
+timeout included:
 
 ```toml
 [mcp_servers.clustercontrol]
