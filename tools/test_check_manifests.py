@@ -79,6 +79,10 @@ class CheckManifestsTest(unittest.TestCase):
         self.assert_fails(edit(CLAUDE_MANIFEST, lambda d: d["userConfig"]["mcp_token"].update(default="planted")),
                           "must not have a default")
 
+    def test_header_besides_authorization(self):
+        self.assert_fails(claude_server(lambda s: s["headers"].update({"X-Api-Key": "planted"})),
+                          "headers may hold only Authorization")
+
     def test_literal_url(self):
         self.assert_fails(claude_server(lambda s: s.update(url="https://cc.example.com/mcp")),
                           "url must be exactly")
@@ -91,6 +95,10 @@ class CheckManifestsTest(unittest.TestCase):
     def test_codex_headers_block(self):
         self.assert_fails(codex_server(lambda s: s.update(headers={"Authorization": "Bearer planted"})),
                           "headers block")
+
+    def test_codex_literal_http_headers(self):
+        self.assert_fails(codex_server(lambda s: s.update(http_headers={"Authorization": "Bearer planted"})),
+                          "literal http_headers")
 
     # Keeping the two plugins in step.
 

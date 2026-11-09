@@ -11,10 +11,11 @@ nothing else checks that the two plugins of one product stay in step, so this sc
 - each pair of server definitions has the same server names and the same timeout, and that timeout outlasts
   the longest approval window cmon-mcp allows (MCP_APPROVAL_TTL is at most 30 minutes);
 - the Claude Code server's URL is exactly one userConfig reference and its Authorization header exactly
-  `Bearer` and one, each naming a declared option; the token's option is sensitive and has no default, so no
-  credential sits in the repo;
-- the Codex server reads its token from an environment variable and carries no literal token or `headers`
-  block: Codex ignores `headers`, so a token placed there would silently not be sent.
+  `Bearer` and one, each naming a declared option, and it sends no other header; the token's option is
+  sensitive and has no default, so no credential sits in the repo;
+- the Codex server reads its token from an environment variable and carries no literal token, no
+  `http_headers` (sent as written) and no `headers` block (ignored by Codex, so a token there would
+  silently not be sent).
 
 Exit status: 0 when every check passes, 1 when any fails.
 """
@@ -103,7 +104,13 @@ def check_claude(name, folder):
             problem(f"{where}: server {server!r} url must be exactly ${{user_config.<option>}}")
         elif url_ref.group(1) not in options:
             problem(f"{where}: server {server!r} url references undeclared userConfig option {url_ref.group(1)!r}")
-        token_ref = BEARER_REF.fullmatch(cfg.get("headers", {}).get("Authorization", ""))
+        headers = cfg.get("headers", {})
+        # Only the Authorization value is checked for a reference below, so any other header would be a place
+        # a literal could ship unchecked.
+        if set(headers) - {"Authorization"}:
+            problem(f"{where}: server {server!r} headers may hold only Authorization, not "
+                    f"{sorted(set(headers) - {'Authorization'})}")
+        token_ref = BEARER_REF.fullmatch(headers.get("Authorization", ""))
         if not token_ref:
             problem(f"{where}: server {server!r} Authorization header must be exactly Bearer ${{user_config.<option>}}")
         elif token_ref.group(1) not in options:
@@ -139,6 +146,10 @@ def check_codex(name, folder):
             problem(f"{where}: server {server!r} has a literal bearer_token; use bearer_token_env_var")
         if "headers" in cfg:
             problem(f"{where}: server {server!r} has a headers block, which Codex ignores")
+        # http_headers values are sent as written, so they would publish whatever they hold;
+        # env_http_headers names environment variables instead and is the place for a secret header.
+        if "http_headers" in cfg:
+            problem(f"{where}: server {server!r} has literal http_headers; use bearer_token_env_var or env_http_headers")
         if not cfg.get("bearer_token_env_var"):
             problem(f"{where}: server {server!r} needs bearer_token_env_var")
         timeout = cfg.get("tool_timeout_sec")
