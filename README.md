@@ -50,7 +50,7 @@ The two tools read different manifest and MCP formats, so each plugin has its ow
 
   ```bash
   claude plugin validate . --strict
-  claude plugin validate ./claude/clustercontrol-mcp --strict
+  claude plugin validate ./claude/clustercontrol-mcp --strict --profile directory
   python3 tools/check-manifests.py
   python3 -m unittest discover -s tools -p 'test_*.py'
   ```
