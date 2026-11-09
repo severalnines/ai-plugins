@@ -1,7 +1,7 @@
 {
   "name": "clustercontrol-mcp",
   "displayName": "ClusterControl",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Connect Claude Code to the ClusterControl MCP server (cmon-mcp) to inspect, troubleshoot and operate the database clusters ClusterControl manages.",
   "author": {
     "name": "Severalnines",
