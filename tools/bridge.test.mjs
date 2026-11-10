@@ -43,8 +43,9 @@ async function until(what, condition, ms = 5000) {
 // A fake cmon-mcp. `post(entry, res, state)` may answer a POST itself and return true; everything else
 // gets the default: a session on initialize, 202 for notifications and client responses, an echo for
 // requests, an open stream for GET, and 404 for a session listed in state.stale. With `tls`, a key and
-// certificate, it serves https.
-async function mcpServer(t, { post, tls, sessionIds = ['session-A', 'session-B', 'session-C'] } = {}) {
+// certificate, it serves https. `streamDelay` holds back the listening stream's headers by that many ms,
+// which is the time a real server needs before it can deliver an approval prompt.
+async function mcpServer(t, { post, tls, streamDelay = 0, sessionIds = ['session-A', 'session-B', 'session-C'] } = {}) {
   const requests = [];
   const sockets = new Set();
   const state = { streams: [], initializes: 0, stale: new Set() };
@@ -58,6 +59,7 @@ async function mcpServer(t, { post, tls, sessionIds = ['session-A', 'session-B',
         headers: req.headers,
         body: Buffer.concat(chunks).toString('utf8'),
         connection: req.socket.remotePort, // differs for every connection the bridge opens
+        streamsOpen: state.streams.length, // listening streams opened before this request arrived
       };
       try {
         entry.json = entry.body ? JSON.parse(entry.body) : undefined;
@@ -71,9 +73,13 @@ async function mcpServer(t, { post, tls, sessionIds = ['session-A', 'session-B',
         return;
       }
       if (entry.method === 'GET') {
-        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-        res.flushHeaders();
-        state.streams.push(res);
+        const open = () => {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          res.flushHeaders();
+          state.streams.push(res);
+        };
+        if (streamDelay > 0) setTimeout(open, streamDelay);
+        else open();
         return;
       }
       if (entry.method === 'DELETE') {
@@ -291,6 +297,45 @@ test('opens the listening stream once the client is initialized, and relays what
   const reply = await until('the reply', () => server.requests.find((r) => r.method === 'POST' && r.json?.id === 41));
   assert.deepEqual(reply.json.result, { action: 'accept' });
   assert.equal(reply.headers['mcp-session-id'], 'session-A');
+});
+
+test('holds requests until the listening stream of a new session is open', async (t) => {
+  // cmon-mcp refuses a call that needs an approval while the session has no listening stream to send the
+  // prompt on. A client sends its first requests right behind notifications/initialized, so the bridge
+  // holds them until the stream is open. A client response is not held: the server is waiting for it.
+  const server = await mcpServer(t, { streamDelay: 400 });
+  const bridge = startBridge(t, server.url);
+  bridge.send(INIT);
+  await bridge.next();
+  bridge.send(INITIALIZED);
+  bridge.send({ jsonrpc: '2.0', id: 77, result: {} });
+  bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'create_job' } });
+  assert.equal((await bridge.next()).id, 2);
+
+  const [call] = posts(server, 'tools/call');
+  assert.equal(call.streamsOpen, 1, 'the call arrived before the listening stream was open');
+  const response = server.requests.find((r) => r.method === 'POST' && r.json?.id === 77);
+  assert.equal(response.streamsOpen, 0, 'the client response was held back');
+});
+
+test('holds requests while a new session is being started', async (t) => {
+  const server = await mcpServer(t, { streamDelay: 400 });
+  const bridge = startBridge(t, server.url);
+  await handshake(bridge);
+  await until('the listening stream', () => server.state.streams.length === 1);
+
+  server.state.stale.add('session-A');
+  server.state.streams[0].end();
+  bridge.send({ jsonrpc: '2.0', id: 5, method: 'tools/list' });
+  // The new session has its id from here on, and its listening stream is still 400 ms away.
+  await until('the replayed handshake', () => posts(server, 'notifications/initialized').length === 2);
+  bridge.send({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'create_job' } });
+  const answers = [await bridge.next(), await bridge.next()].map((m) => m.id).sort();
+  assert.deepEqual(answers, [5, 6]);
+
+  const [call] = posts(server, 'tools/call');
+  assert.equal(call.headers['mcp-session-id'], 'session-B');
+  assert.equal(call.streamsOpen, 2, 'the call arrived before the new session’s listening stream was open');
 });
 
 test('reopens the listening stream when it drops', async (t) => {
@@ -511,12 +556,16 @@ test('gives up after one new session, and says the session ended', async (t) => 
   });
   const bridge = startBridge(t, server.url);
   await handshake(bridge);
+  // The handshake has to be over first: its last notification would be refused as well, and would start
+  // a new session of its own.
+  await until('the listening stream', () => server.state.streams.length === 1);
   refuseEverySession = true;
   bridge.send({ jsonrpc: '2.0', id: 5, method: 'tools/list' });
   const answer = await bridge.next();
   assert.equal(answer.id, 5);
   assert.match(answer.error.message, /session/i);
   assert.equal(posts(server, 'initialize').length, 2, 'one replayed initialize, not a loop');
+  assert.equal(posts(server, 'tools/list').length, 1, 'the request is not sent to a session that failed to start');
 });
 
 test('does not start a new session for a client response the server refuses', async (t) => {

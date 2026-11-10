@@ -18,8 +18,9 @@
 //   POST    every message from Claude Code. The server answers 202 (nothing to relay), 200 with one
 //           JSON message, or 200 with an event stream of messages.
 //   GET     one listening stream, opened once Claude Code has sent notifications/initialized. The
-//           server sends its own requests here, such as an approval prompt, so the bridge reopens the
-//           stream when it drops.
+//           server sends its own requests here, such as an approval prompt, and refuses a call that
+//           needs one while no stream is open. So the bridge holds requests until the stream of a new
+//           session is open, and reopens the stream when it drops.
 //   DELETE  ends the session when Claude Code closes stdin.
 //
 // Messages are relayed as text and never re-encoded: a JSON number above 2^53, such as a nanosecond
@@ -119,6 +120,7 @@ function run({ url, token }) {
   let protocolVersion; // what initialize negotiated
   let handshake; // the client's own initialize request, kept to start a new session with
   let renewal; // a new session being started, shared by the requests waiting for it
+  let ready = Promise.resolve(); // settles when a session that is being set up can take requests
   let listening; // the current listening stream
   let closing = false;
 
@@ -264,6 +266,7 @@ function run({ url, token }) {
     renewal = startSession().finally(() => {
       renewal = undefined;
     });
+    ready = renewal.catch(() => {});
     return renewal;
   }
 
@@ -294,6 +297,7 @@ function run({ url, token }) {
     }
     const isRequest = message.method !== undefined && message.id !== undefined;
     const isInitialize = message.method === 'initialize';
+    const isInitialized = message.method === 'notifications/initialized';
     let answered = false;
     const relay = (text) => {
       if (isRequest && !answered) {
@@ -318,6 +322,17 @@ function run({ url, token }) {
       protocolVersion = undefined;
       handshake = message;
     }
+    // A session is usable once its listening stream is open: until then the server refuses a call that
+    // needs an approval, because it has nowhere to send the prompt. The client's first requests arrive
+    // right behind notifications/initialized, and others arrive while a new session is being started, so
+    // they wait here. A client response does not wait: it answers a request the server already sent.
+    if (message.method !== undefined && !isInitialize && !isInitialized) await ready;
+    let release;
+    if (isInitialized) {
+      ready = new Promise((resolve) => {
+        release = resolve;
+      });
+    }
     let used = isInitialize ? null : session;
     let problem;
     try {
@@ -331,7 +346,7 @@ function run({ url, token }) {
       if (reply.status === 200 && !reply.whole) {
         problem = `The connection to the ClusterControl MCP server at ${where} was lost before it answered.`;
       } else if (reply.status === 200 || reply.status === 202 || reply.status === 204) {
-        if (message.method === 'notifications/initialized') listen();
+        if (isInitialized) await listen();
         if (isRequest && !answered) {
           problem = `The ClusterControl MCP server at ${where} closed the request without an answer.`;
         }
@@ -340,6 +355,8 @@ function run({ url, token }) {
       }
     } catch (err) {
       problem = explain(err);
+    } finally {
+      release?.();
     }
     if (problem === undefined || answered) return;
     if (isRequest) fail(message.id, problem);
