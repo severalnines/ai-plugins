@@ -1,11 +1,10 @@
 {
   "mcpServers": {
     "clustercontrol": {
-      "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/bridge/cmon-mcp-bridge.mjs"],
-      "env": {
-        "CLUSTERCONTROL_MCP_URL": "${user_config.mcp_url}",
-        "CLUSTERCONTROL_MCP_TOKEN": "${user_config.mcp_token}"
+      "type": "http",
+      "url": "${user_config.mcp_url}",
+      "headers": {
+        "Authorization": "Bearer ${user_config.mcp_token}"
       },
       "timeout": 1860000
     }

@@ -40,8 +40,8 @@ def codex_server(change):
     return edit(CODEX_MCP, lambda d: change(d["mcpServers"]["clustercontrol"]))
 
 
-def claude_env(name, value):
-    return claude_server(lambda s: s["env"].update({name: value}))
+def claude_header(value):
+    return claude_server(lambda s: s["headers"].update(Authorization=value))
 
 
 class CheckManifestsTest(unittest.TestCase):
@@ -65,15 +65,11 @@ class CheckManifestsTest(unittest.TestCase):
     # Credentials in the Claude Code plugin.
 
     def test_literal_text_beside_the_token_reference(self):
-        self.assert_fails(claude_env("CLUSTERCONTROL_MCP_TOKEN", "planted-token-${user_config.mcp_token}"),
+        self.assert_fails(claude_header("Bearer planted-token-${user_config.mcp_token}"),
                           "must be exactly")
 
-    def test_literal_env_value(self):
-        self.assert_fails(claude_env("X_API_KEY", "planted"), "must be exactly")
-
-    def test_env_reference_to_an_undeclared_option(self):
-        self.assert_fails(claude_env("CLUSTERCONTROL_MCP_TOKEN", "${user_config.missing_token}"),
-                          "undeclared userConfig option")
+    def test_header_reference_to_an_undeclared_option(self):
+        self.assert_fails(claude_header("Bearer ${user_config.missing_token}"), "undeclared userConfig option")
 
     def test_token_option_not_sensitive(self):
         self.assert_fails(edit(CLAUDE_MANIFEST, lambda d: d["userConfig"]["mcp_token"].update(sensitive=False)),
@@ -83,42 +79,13 @@ class CheckManifestsTest(unittest.TestCase):
         self.assert_fails(edit(CLAUDE_MANIFEST, lambda d: d["userConfig"]["mcp_token"].update(default="planted")),
                           "must not have a default")
 
-    # What the Claude Code plugin runs. Anthropic's directory refuses a server whose url it cannot read for
-    # certain, and every customer has a url of their own, so the plugin declares none and runs the bridge.
+    def test_header_besides_authorization(self):
+        self.assert_fails(claude_server(lambda s: s["headers"].update({"X-Api-Key": "planted"})),
+                          "headers may hold only Authorization")
 
-    def test_remote_url(self):
+    def test_literal_url(self):
         self.assert_fails(claude_server(lambda s: s.update(url="https://cc.example.com/mcp")),
-                          "must not declare 'url'")
-
-    def test_headers_block(self):
-        self.assert_fails(claude_server(lambda s: s.update(headers={"Authorization": "Bearer planted"})),
-                          "must not declare 'headers'")
-
-    def test_command_other_than_node(self):
-        self.assert_fails(claude_server(lambda s: s.update(command="npx")), "command must be 'node'")
-
-    def test_argument_besides_the_bridge(self):
-        self.assert_fails(claude_server(lambda s: s["args"].append("--planted")), "exactly one argument")
-
-    def test_bridge_path_outside_the_plugin(self):
-        self.assert_fails(claude_server(lambda s: s.update(args=["${CLAUDE_PLUGIN_ROOT}/../../tools/planted.mjs"])),
-                          "inside the plugin")
-
-    def test_bridge_file_missing(self):
-        self.assert_fails(claude_server(lambda s: s.update(args=["${CLAUDE_PLUGIN_ROOT}/bridge/missing.mjs"])),
-                          "does not exist")
-
-    def test_env_name_the_bridge_does_not_read(self):
-        def rename(server):
-            server["env"]["CLUSTERCONTROL_TOKEN"] = server["env"].pop("CLUSTERCONTROL_MCP_TOKEN")
-        self.assert_fails(claude_server(rename), "the bridge does not read")
-
-    def test_variable_the_bridge_reads_and_the_server_does_not_set(self):
-        self.assert_fails(claude_server(lambda s: s["env"].pop("CLUSTERCONTROL_MCP_URL")),
-                          "the bridge reads CLUSTERCONTROL_MCP_URL")
-
-    def test_no_env_block(self):
-        self.assert_fails(claude_server(lambda s: s.pop("env")), "needs an env block")
+                          "url must be exactly")
 
     # Credentials in the Codex plugin.
 
