@@ -147,6 +147,13 @@ class CheckManifestsTest(unittest.TestCase):
         self.assert_fails(setup_file("skills/connect/SKILL.md", "---\ndescription:\nname: connect\n---\n\n# Connect\n"),
                           "needs a description")
 
+    def test_setup_plugin_skill_with_a_description_that_is_not_text(self):
+        # YAML reads each of these as something other than a piece of text: nothing, nothing, a list, a map.
+        for value in ("null", "~", "[connect, setup]", "{text: planted}"):
+            with self.subTest(value=value):
+                skill = f"---\nname: connect\ndescription: {value}\n---\n\n# Connect\n"
+                self.assert_fails(setup_file("skills/connect/SKILL.md", skill), "needs a description")
+
     def test_setup_plugin_skill_with_a_folded_description_passes(self):
         result = self.run_checker(setup_file(
             "skills/connect/SKILL.md", "---\nname: connect\ndescription: >\n  Walk the user through it.\n---\n\n# Connect\n"))

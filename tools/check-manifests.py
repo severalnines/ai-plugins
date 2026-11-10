@@ -161,6 +161,9 @@ def skill_description(text):
                     break
                 block.append(more.strip())
             value = " ".join(part for part in block if part)
+        # What YAML reads as nothing, a list or a map is not a description, though it is not empty.
+        if value.lower() in ("null", "~") or value[:1] in ("[", "{"):
+            return ""
         return value.strip("\"'").strip()
     return ""
 
