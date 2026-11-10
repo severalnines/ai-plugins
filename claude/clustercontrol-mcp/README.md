@@ -7,10 +7,16 @@ fleet review, failover drills and Galera recovery.
 
 ## What the plugin does
 
-The plugin adds one MCP server, `clustercontrol`, to Claude Code. It connects over Streamable HTTP to the
-`cmon-mcp` service on your ClusterControl controller, at the URL you enter, and sends the token you enter as
-an `Authorization: Bearer` header. It runs nothing on your machine, installs nothing, and connects to
-nothing else.
+The plugin adds one MCP server, `clustercontrol`, to Claude Code. Every ClusterControl site runs its own
+`cmon-mcp`, so the plugin cannot name one address for everyone. It takes yours from its options and reaches
+the server through a small bridge.
+
+Claude Code starts the bridge, [`bridge/cmon-mcp-bridge.mjs`](bridge/cmon-mcp-bridge.mjs), with Node.js on
+your machine. The bridge is one readable file. It connects over Streamable HTTP to the `cmon-mcp` service on
+your ClusterControl controller, at the URL you enter, and sends the token you enter as an
+`Authorization: Bearer` header. It connects to that URL and to nothing else. It reads and writes no files,
+runs no other program, installs nothing, and uses only modules that ship with Node.js. It never prints the
+token.
 
 The server on the controller decides what Claude can do: which tools it lists, whether it is read-only, and
 whether a change needs a person's approval. Tool results, such as cluster names, host names, metrics and
@@ -22,6 +28,7 @@ log lines, become part of your Claude conversation.
   controller.
 - `cmon-mcp` running as its systemd service in HTTP mode, with a bearer token.
 - Claude Code.
+- Node.js 18 or later on the machine that runs Claude Code. `node --version` shows what you have.
 
 ## 1. Prepare the controller
 
@@ -51,8 +58,8 @@ server in one of three ways:
   file must not be readable by group or others). The TLS listener requires the `MCP_AUTH_TOKEN` from step 1,
   or an identity map. The server then serves TLS on that address as well, while the plain listener keeps
   serving the tunnel. Enter `https://<host>:3443/mcp` as the URL. If the
-  certificate comes from a private CA, start Claude Code with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` so it
-  trusts that CA.
+  certificate comes from a private CA, start Claude Code with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` so the
+  bridge trusts that CA.
 - **TLS reverse proxy.** Put a proxy with a certificate, such as nginx, in front of `127.0.0.1:3000`, and
   use its `https://<host>/mcp` URL. Turn response buffering off for `/mcp`, and set the read timeout above
   the server's approval window.
@@ -90,11 +97,24 @@ covers the setup.
 
 ## Troubleshooting
 
-- **`/mcp` says the server rejected the Authorization header (HTTP 401):** the token does not match
-  `MCP_AUTH_TOKEN`. Run `/plugin configure clustercontrol-mcp@severalnines` and enter it again.
-- **`/mcp` says it is unable to connect (ECONNREFUSED):** the SSH tunnel is not running, `cmon-mcp` is
-  stopped, or `MCP_BIND_ADDRESS` is not `127.0.0.1:3000`.
+`/mcp` shows why the server failed to connect.
+
+- **"Executable not found in $PATH":** Claude Code could not find `node`. Install Node.js 18 or later, and
+  start Claude Code from a shell where `node --version` works.
+- **"refused the token (HTTP 401)":** the token does not match `MCP_AUTH_TOKEN`. Run
+  `/plugin configure clustercontrol-mcp@severalnines` and enter it again.
+- **"Cannot reach the ClusterControl MCP server ... (ECONNREFUSED)":** the SSH tunnel is not running,
+  `cmon-mcp` is stopped, or `MCP_BIND_ADDRESS` is not `127.0.0.1:3000`.
+- **"The server certificate was not trusted":** the certificate comes from a CA your machine does not know.
+  Start Claude Code with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 - **Fewer tools than expected:** the server's profile (`MCP_PROFILE`) or read-only mode limits what it lists.
+
+- **"a prompt it sent is still open ... Reconnect the server from /mcp":** `cmon-mcp` restarted while an
+  approval prompt was waiting for your answer. The bridge stops, so that the answer cannot reach a new
+  session and approve something else. Reconnect the server from `/mcp` and ask again.
+
+After any other `cmon-mcp` restart there is nothing to do: the bridge starts a new session with the next
+request.
 
 ## Support
 
