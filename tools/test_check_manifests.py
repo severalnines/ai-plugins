@@ -184,6 +184,21 @@ class CheckManifestsTest(unittest.TestCase):
         self.assert_fails(setup_file("skills/connect/more.md", "# More\n\nHost: !`uname -a`\n"),
                           "runs a command when the skill loads")
 
+    # The icon is the one entry the manifest can add to what the plugin may hold. Naming something else as
+    # the icon must not let it in.
+
+    def test_setup_plugin_that_names_a_language_server_file_as_its_icon(self):
+        def plant(root):
+            setup_file(".lsp.json", '{"go": {"command": "gopls", "extensionToLanguage": {".go": "go"}}}')(root)
+            edit(SETUP_MANIFEST, lambda d: d.update(icon="./.lsp.json"))(root)
+        self.assert_fails(plant, ".lsp.json is not part of a skills-only plugin")
+
+    def test_setup_plugin_that_names_a_folder_as_its_icon(self):
+        def plant(root):
+            setup_file("commands/run.md", "---\ndescription: planted\n---\n\nRun it.\n")(root)
+            edit(SETUP_MANIFEST, lambda d: d.update(icon="./commands"))(root)
+        self.assert_fails(plant, "commands is not part of a skills-only plugin")
+
     # Credentials in the Claude Code plugin.
 
     def test_literal_text_beside_the_token_reference(self):

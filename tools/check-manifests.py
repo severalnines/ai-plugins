@@ -181,7 +181,10 @@ def check_directory_plugin(where, folder, manifest):
     icon = manifest.get("icon")
     icon_path = (folder / icon).resolve() if isinstance(icon, str) else None
     entries = set(SKILLS_ONLY_ENTRIES)
-    if icon_path is not None and icon_path.parent == folder:
+    # The icon is the one entry the manifest can add, and only as an image file at the top of the plugin.
+    # A manifest that named a folder, or a file of another kind, as its icon would otherwise let it in.
+    if (icon_path is not None and icon_path.parent == folder and icon_path.is_file()
+            and not icon_path.is_symlink() and icon_path.suffix.lower() in {*IMAGE_STARTS, ".svg"}):
         entries.add(icon_path.name)
     for entry in sorted(folder.iterdir()):
         if entry.name not in entries:
