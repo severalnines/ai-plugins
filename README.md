@@ -11,9 +11,8 @@ that runs on your controller.
 
 ## Install
 
-Both plugins need `cmon-mcp` running in HTTP mode on the controller, with a bearer token. The Claude Code
-plugin also needs Node.js 18 or later on your machine. The plugin READMEs cover that setup and how to reach
-the server securely.
+Both plugins need `cmon-mcp` running in HTTP mode on the controller, with a bearer token. The plugin READMEs
+cover that setup and how to reach the server securely.
 
 **Claude Code**
 
@@ -35,17 +34,11 @@ codex plugin add clustercontrol-mcp@severalnines
 .claude-plugin/marketplace.json     Claude Code marketplace "severalnines"
 .agents/plugins/marketplace.json    Codex marketplace "severalnines"
 claude/clustercontrol-mcp/          Claude Code plugin: asks for the URL and token at install
-claude/clustercontrol-mcp/bridge/   the bridge that plugin runs to reach cmon-mcp
 codex/clustercontrol-mcp/           Codex plugin: tunnel URL, token from CLUSTERCONTROL_MCP_TOKEN
 tools/check-manifests.py            consistency checks (CI), with planted-defect tests beside it
-tools/bridge.test.mjs               the bridge's tests (CI)
 ```
 
 The two tools read different manifest and MCP formats, so each plugin has its own folder.
-
-The Claude Code plugin runs a bridge, and the Codex plugin connects directly. Anthropic's plugin directory
-refuses a plugin whose server address it cannot read, and every ClusterControl site has its own address, so
-the Claude Code plugin declares none and passes the user's address to the bridge.
 
 ## Changing a plugin
 
@@ -60,10 +53,7 @@ the Claude Code plugin declares none and passes the user's address to the bridge
   claude plugin validate ./claude/clustercontrol-mcp --strict --profile directory
   python3 tools/check-manifests.py
   python3 -m unittest discover -s tools -p 'test_*.py'
-  node --test tools/bridge.test.mjs
   ```
-- Keep the bridge one readable file with no dependencies. Anthropic's directory has a reviewer read every
-  version of a plugin that runs a program, and asks for readable source, not packed or minified code.
 
 ## License
 
