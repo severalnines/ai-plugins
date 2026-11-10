@@ -52,7 +52,13 @@ async function mcpServer(t, { post, tls, sessionIds = ['session-A', 'session-B',
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
-      const entry = { method: req.method, url: req.url, headers: req.headers, body: Buffer.concat(chunks).toString('utf8') };
+      const entry = {
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+        connection: req.socket.remotePort, // differs for every connection the bridge opens
+      };
       try {
         entry.json = entry.body ? JSON.parse(entry.body) : undefined;
       } catch {
@@ -140,7 +146,17 @@ function startBridge(t, url, { token = TOKEN, env = {} } = {}) {
     if (token && (stdout.includes(token) || stderr.includes(token))) leaks.push(t.name);
   });
   return {
-    exited,
+    // How the bridge ended. Rejects when it is still running after `ms`, so that a bridge that should
+    // have exited fails its test and does not stall the run.
+    exit: (ms = 5000) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`the bridge was still running after ${ms} ms (stderr: ${stderr.trim()})`));
+      }, ms);
+      exited.then((how) => {
+        clearTimeout(timer);
+        resolve(how);
+      });
+    }),
     messages,
     stdout: () => stdout,
     stderr: () => stderr,
@@ -379,6 +395,43 @@ test('reports any other HTTP status with what the server said', async (t) => {
   assert.match(answer.error.message, /Session capacity reached/);
 });
 
+test('sends a request once when the server answers it with an error', async (t) => {
+  const server = await mcpServer(t, {
+    post: (entry, res) => {
+      if (entry.json?.method !== 'tools/call') return false;
+      res.writeHead(500, { 'Content-Type': 'text/plain' }).end('the job was created, then something failed\n');
+      return true;
+    },
+  });
+  const bridge = startBridge(t, server.url);
+  await handshake(bridge);
+  bridge.send({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'create_job' } });
+  const answer = await bridge.next();
+  assert.equal(answer.id, 8);
+  assert.match(answer.error.message, /500/);
+  // A request that reached the server may have run, and CMON jobs are not idempotent. Only a 404 for
+  // the session, which the server sends before it runs anything, is followed by a second attempt.
+  assert.equal(posts(server, 'tools/call').length, 1);
+  assert.equal(posts(server, 'initialize').length, 1);
+});
+
+test('uses each connection for one request', async (t) => {
+  // A server closes connections that sit idle; cmon-mcp's TLS listener does after 120 seconds. A request
+  // sent on a connection as the server closes it fails without saying whether it ran, and it must not
+  // be sent again, so the bridge leaves no idle connection to reuse.
+  const server = await mcpServer(t);
+  const bridge = startBridge(t, server.url);
+  await handshake(bridge);
+  bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  await bridge.next();
+  await until('the listening stream', () => server.state.streams.length === 1);
+  bridge.end();
+  await bridge.exit();
+  assert.deepEqual([...new Set(server.requests.map((r) => r.method))].sort(), ['DELETE', 'GET', 'POST']);
+  const connections = server.requests.map((r) => r.connection);
+  assert.equal(new Set(connections).size, connections.length, `a connection was reused: ${connections}`);
+});
+
 test('answers with an error when the connection is lost before the answer', async (t) => {
   const server = await mcpServer(t, {
     post: (entry, res) => {
@@ -501,7 +554,7 @@ test('ends the session when stdin closes, then exits 0', async (t) => {
   await handshake(bridge);
   await until('the listening stream', () => server.state.streams.length === 1);
   bridge.end();
-  assert.deepEqual(await bridge.exited, { code: 0, signal: null });
+  assert.deepEqual(await bridge.exit(), { code: 0, signal: null });
   const end = server.requests.find((r) => r.method === 'DELETE');
   assert.ok(end, 'a DELETE was sent');
   assert.equal(end.headers['mcp-session-id'], 'session-A');
@@ -514,7 +567,7 @@ test('lets a request in flight finish when stdin closes', async (t) => {
   bridge.send(INIT);
   bridge.end();
   assert.equal((await bridge.next()).id, 1);
-  assert.deepEqual(await bridge.exited, { code: 0, signal: null });
+  assert.deepEqual(await bridge.exit(), { code: 0, signal: null });
 });
 
 test('refuses to start with settings it cannot use, and says which', async (t) => {
@@ -528,7 +581,7 @@ test('refuses to start with settings it cannot use, and says which', async (t) =
   for (const [name, { url = 'http://127.0.0.1:9/mcp', token = TOKEN }, expected] of cases) {
     await t.test(name, async (t) => {
       const bridge = startBridge(t, url, { token });
-      assert.deepEqual(await bridge.exited, { code: 78, signal: null });
+      assert.deepEqual(await bridge.exit(), { code: 78, signal: null });
       assert.match(bridge.stderr(), expected);
       assert.match(bridge.stderr(), /\/plugin configure clustercontrol-mcp@severalnines/);
       assert.doesNotMatch(bridge.stderr(), /pw-secret-9c1/);
@@ -541,7 +594,7 @@ test('warns when the token would cross a network unencrypted', async (t) => {
   // 192.0.2.0/24 is reserved for documentation; nothing is sent, because no message is.
   const bridge = startBridge(t, 'http://192.0.2.10:3000/mcp');
   bridge.end();
-  assert.deepEqual(await bridge.exited, { code: 0, signal: null });
+  assert.deepEqual(await bridge.exit(), { code: 0, signal: null });
   assert.match(bridge.stderr(), /unencrypted/);
   assert.match(bridge.stderr(), /192\.0\.2\.10/);
 });
