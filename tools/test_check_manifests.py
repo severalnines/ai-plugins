@@ -164,6 +164,26 @@ class CheckManifestsTest(unittest.TestCase):
             (root / SETUP / "skills" / "connect" / "notes.md").symlink_to("SKILL.md")
         self.assert_fails(link, "symbolic link")
 
+    # A skill can run a command by itself, without any of the files above: through hooks in its front
+    # matter, through tools it approves in advance, or through a !`command` line in its text.
+
+    def test_setup_plugin_skill_with_hooks_in_its_front_matter(self):
+        skill = ("---\nname: connect\ndescription: Walk the user through it.\nhooks:\n  PreToolUse:\n"
+                 "    - hooks:\n        - type: command\n          command: echo planted\n---\n\n# Connect\n")
+        self.assert_fails(setup_file("skills/connect/SKILL.md", skill), "front matter key 'hooks'")
+
+    def test_setup_plugin_skill_that_approves_tools(self):
+        skill = "---\nname: connect\ndescription: Walk the user through it.\nallowed-tools: Bash\n---\n\n# Connect\n"
+        self.assert_fails(setup_file("skills/connect/SKILL.md", skill), "front matter key 'allowed-tools'")
+
+    def test_setup_plugin_skill_with_a_command_line_in_its_text(self):
+        skill = "---\nname: connect\ndescription: Walk the user through it.\n---\n\n# Connect\n\nHost: !`uname -a`\n"
+        self.assert_fails(setup_file("skills/connect/SKILL.md", skill), "runs a command when the skill loads")
+
+    def test_setup_plugin_with_a_command_line_in_another_skill_file(self):
+        self.assert_fails(setup_file("skills/connect/more.md", "# More\n\nHost: !`uname -a`\n"),
+                          "runs a command when the skill loads")
+
     # Credentials in the Claude Code plugin.
 
     def test_literal_text_beside_the_token_reference(self):

@@ -59,6 +59,11 @@ SKILLS_ONLY_MANIFEST_KEYS = {
     "$schema", "name", "displayName", "version", "description", "author", "homepage", "repository", "license",
     "keywords", "icon", "documentationUrl", "supportUrl", "privacyPolicyUrl", "termsOfServiceUrl",
 }
+# What a skill's front matter may set in such a plugin. Other keys can run a command by themselves (hooks)
+# or approve tools in advance (allowed-tools), and none is needed to describe a skill.
+SKILLS_ONLY_FRONT_MATTER_KEYS = {"name", "description"}
+# In a skill, !`command` runs the command when the skill loads and puts its output into the text.
+COMMAND_LINE_MARK = "!`"
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".yaml", ".yml"}
 TEXT_NAMES = {"LICENSE", ".gitignore"}
 # How a file of each image type begins. A file named as an image that begins otherwise is something else.
@@ -127,12 +132,23 @@ def marketplace_folders(path, codex):
     return folders
 
 
-def skill_description(text):
-    """The description in a skill's front matter as one string, or "" when it has none."""
+def front_matter(text):
+    """The lines of a skill's front matter, or [] when it has none."""
     lines = [line.rstrip() for line in text.split("\n")]
     if not lines or lines[0] != "---" or "---" not in lines[1:]:
-        return ""
-    front = lines[1:lines.index("---", 1)]
+        return []
+    return lines[1:lines.index("---", 1)]
+
+
+def front_matter_keys(text):
+    """The top-level keys of a skill's front matter: the lines that are not indented."""
+    return {line.split(":", 1)[0].strip() for line in front_matter(text)
+            if line.strip() and not line.startswith((" ", "\t", "#", "-")) and ":" in line}
+
+
+def skill_description(text):
+    """The description in a skill's front matter as one string, or "" when it has none."""
+    front = front_matter(text)
     for at, line in enumerate(front):
         if not line.startswith("description:"):
             continue
@@ -178,8 +194,13 @@ def check_directory_plugin(where, folder, manifest):
     if not skills:
         problem(f"{where}: needs at least one skill, skills/<name>/SKILL.md")
     for skill in skills:
-        if not skill_description(skill.read_text(encoding="utf-8", errors="replace")):
+        text = skill.read_text(encoding="utf-8", errors="replace")
+        if not skill_description(text):
             problem(f"{where}: {skill.relative_to(folder)} needs a description in its front matter")
+        for key in sorted(front_matter_keys(text) - SKILLS_ONLY_FRONT_MATTER_KEYS):
+            problem(f"{where}: {skill.relative_to(folder)} has front matter key {key!r}; in a skills-only plugin "
+                    f"a skill sets only {' and '.join(sorted(SKILLS_ONLY_FRONT_MATTER_KEYS))}, because other "
+                    f"keys can run a command or approve tools")
     for path in sorted(p for p in folder.rglob("*") if p.is_symlink() or p.is_file()):
         rel = path.relative_to(folder)
         if path.is_symlink():
@@ -206,11 +227,15 @@ def check_directory_plugin(where, folder, manifest):
             continue
         if b"\x00" in data:
             problem(f"{where}: {rel} holds a NUL byte, so it is not text")
-        else:
-            try:
-                data.decode("utf-8")
-            except UnicodeDecodeError:
-                problem(f"{where}: {rel} is not UTF-8 text")
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            problem(f"{where}: {rel} is not UTF-8 text")
+            continue
+        if rel.parts[0] == "skills" and COMMAND_LINE_MARK in text:
+            problem(f"{where}: {rel} holds a {COMMAND_LINE_MARK}command` line, which runs a command when the "
+                    f"skill loads")
 
 
 def check_claude(name, folder):
