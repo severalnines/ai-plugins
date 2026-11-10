@@ -297,25 +297,94 @@ test('opens the listening stream once the client is initialized, and relays what
   const reply = await until('the reply', () => server.requests.find((r) => r.method === 'POST' && r.json?.id === 41));
   assert.deepEqual(reply.json.result, { action: 'accept' });
   assert.equal(reply.headers['mcp-session-id'], 'session-A');
+
+  // A prompt is answered once. A second answer has no prompt left to belong to.
+  bridge.send({ jsonrpc: '2.0', id: 41, result: { action: 'accept' } });
+  bridge.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
+  assert.equal((await bridge.next()).id, 2);
+  assert.equal(server.requests.filter((r) => r.json?.id === 41).length, 1, 'the prompt was answered twice');
 });
 
 test('holds requests until the listening stream of a new session is open', async (t) => {
   // cmon-mcp refuses a call that needs an approval while the session has no listening stream to send the
   // prompt on. A client sends its first requests right behind notifications/initialized, so the bridge
   // holds them until the stream is open. A client response is not held: the server is waiting for it.
-  const server = await mcpServer(t, { streamDelay: 400 });
+  // Here the server asks for the client's roots inside its answer to initialize, before any stream exists.
+  const server = await mcpServer(t, {
+    streamDelay: 400,
+    post: (entry, res, state) => {
+      if (entry.json?.method !== 'initialize') return false;
+      state.initializes += 1;
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Mcp-Session-Id': 'session-A' });
+      res.write('data: {"jsonrpc":"2.0","id":9,"method":"roots/list"}\n\n');
+      res.end(`data: ${JSON.stringify({
+        jsonrpc: '2.0',
+        id: entry.json.id,
+        result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-cmon-mcp', version: '0' } },
+      })}\n\n`);
+      return true;
+    },
+  });
   const bridge = startBridge(t, server.url);
   bridge.send(INIT);
-  await bridge.next();
+  assert.equal((await bridge.next()).method, 'roots/list');
+  assert.equal((await bridge.next()).id, 1);
   bridge.send(INITIALIZED);
-  bridge.send({ jsonrpc: '2.0', id: 77, result: {} });
+  bridge.send({ jsonrpc: '2.0', id: 9, result: { roots: [] } });
   bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'create_job' } });
   assert.equal((await bridge.next()).id, 2);
 
   const [call] = posts(server, 'tools/call');
   assert.equal(call.streamsOpen, 1, 'the call arrived before the listening stream was open');
-  const response = server.requests.find((r) => r.method === 'POST' && r.json?.id === 77);
+  const response = server.requests.find((r) => r.method === 'POST' && r.json?.id === 9 && r.json.method === undefined);
   assert.equal(response.streamsOpen, 0, 'the client response was held back');
+  assert.equal(response.headers['mcp-session-id'], 'session-A');
+});
+
+test('holds requests for a listening stream that takes longer than three seconds to open', async (t) => {
+  const server = await mcpServer(t, { streamDelay: 3500 });
+  const bridge = startBridge(t, server.url);
+  bridge.send(INIT);
+  await bridge.next();
+  bridge.send(INITIALIZED);
+  bridge.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'create_job' } });
+  assert.equal((await bridge.next(8000)).id, 2);
+  assert.equal(posts(server, 'tools/call')[0].streamsOpen, 1, 'the call arrived before the listening stream was open');
+});
+
+test('ends, and starts no new session, when the session is lost while one of its prompts is open', async (t) => {
+  const server = await mcpServer(t);
+  const bridge = startBridge(t, server.url);
+  await handshake(bridge);
+  await until('the listening stream', () => server.state.streams.length === 1);
+  const prompt = { jsonrpc: '2.0', id: 1, method: 'elicitation/create', params: { message: 'Drop cluster 7?' } };
+  server.state.streams[0].write(`event: message\ndata: ${JSON.stringify(prompt)}\n\n`);
+  assert.deepEqual(await bridge.next(), prompt);
+
+  // cmon-mcp restarts with the prompt unanswered. A new session numbers its prompts from 1 again, so an
+  // answer to this prompt, sent to a new session, could approve whatever that session asks first.
+  server.state.stale.add('session-A');
+  server.state.streams[0].end();
+  bridge.send({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'create_job' } });
+  const answer = await bridge.next();
+  assert.equal(answer.id, 5);
+  assert.match(answer.error.message, /prompt/);
+  assert.match(answer.error.message, /Reconnect the server from \/mcp/);
+  assert.deepEqual(await bridge.exit(), { code: 1, signal: null });
+  assert.equal(posts(server, 'initialize').length, 1, 'no new session was started');
+  assert.equal(posts(server, 'tools/call').length, 1, 'the call was sent once');
+});
+
+test('drops a client response to a request the server did not send', async (t) => {
+  const server = await mcpServer(t);
+  const bridge = startBridge(t, server.url);
+  await handshake(bridge);
+  await until('the listening stream', () => server.state.streams.length === 1);
+  bridge.send({ jsonrpc: '2.0', id: 99, result: { action: 'accept' } });
+  bridge.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
+  assert.equal((await bridge.next()).id, 2);
+  assert.equal(server.requests.some((r) => r.json?.id === 99), false, 'the unasked response was forwarded');
+  assert.match(bridge.stderr(), /did not send/);
 });
 
 test('holds requests while a new session is being started', async (t) => {
@@ -516,9 +585,13 @@ test('survives an empty 200, which the server sends for an empty client response
   });
   const bridge = startBridge(t, server.url);
   await handshake(bridge);
+  await until('the listening stream', () => server.state.streams.length === 1);
+  server.state.streams[0].write('data: {"jsonrpc":"2.0","id":50,"method":"ping"}\n\n');
+  assert.equal((await bridge.next()).id, 50);
   bridge.send({ jsonrpc: '2.0', id: 50 });
   bridge.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
   assert.equal((await bridge.next()).id, 2);
+  assert.equal(server.requests.filter((r) => r.method === 'POST' && r.json?.id === 50).length, 1);
 });
 
 test('starts a new session and retries once when the server no longer knows the session', async (t) => {
@@ -578,11 +651,15 @@ test('does not start a new session for a client response the server refuses', as
   });
   const bridge = startBridge(t, server.url);
   await handshake(bridge);
+  await until('the listening stream', () => server.state.streams.length === 1);
+  server.state.streams[0].write('data: {"jsonrpc":"2.0","id":41,"method":"elicitation/create","params":{}}\n\n');
+  assert.equal((await bridge.next()).id, 41);
   bridge.send({ jsonrpc: '2.0', id: 41, result: { action: 'accept' } });
   bridge.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
   assert.equal((await bridge.next()).id, 2);
+  assert.equal(server.requests.filter((r) => r.json?.id === 41).length, 1, 'the response was sent once');
   assert.equal(posts(server, 'initialize').length, 1);
-  assert.equal(bridge.messages.length, 2);
+  assert.equal(bridge.messages.length, 3);
 });
 
 test('answers a line that is not JSON with a parse error, and keeps going', async (t) => {

@@ -36,6 +36,12 @@
 // under a request. The one retry is after HTTP 404 for the session: the server refused the request
 // before running it, typically because cmon-mcp restarted, so the bridge starts a new session and sends
 // that request once more.
+//
+// Prompts. A request the server makes of Claude Code, such as an approval prompt, is answered once, and
+// the answer goes to the session that asked. Every session numbers its requests from 1, so an answer
+// that reached another session could approve a different operation. If the server forgets a session
+// while one of its prompts is still open, the bridge therefore starts no new session. It reports the
+// error and exits, and Claude Code starts over when the user reconnects.
 
 import http from 'node:http';
 import https from 'node:https';
@@ -46,7 +52,7 @@ const CONFIGURE = 'Run /plugin configure clustercontrol-mcp@severalnines to chan
 const EX_CONFIG = 78;
 const CONNECT_TIMEOUT_MS = 15_000;
 const LISTEN_RETRY_MS = [1_000, 2_000, 4_000, 8_000, 15_000];
-const LISTEN_WAIT_MS = 3_000;
+const LISTEN_WAIT_MS = 15_000;
 const CLOSE_WAIT_MS = 2_000;
 const EVENT_STREAM = 'text/event-stream';
 
@@ -123,9 +129,20 @@ function run({ url, token }) {
   let ready = Promise.resolve(); // settles when a session that is being set up can take requests
   let listening; // the current listening stream
   let closing = false;
+  // The requests the server has made of the client, such as approval prompts, that the client has not
+  // answered yet: request id (as JSON text) -> the session that made it.
+  const asked = new Map();
 
   const emit = (text) => process.stdout.write(`${oneLine(text)}\n`);
   const fail = (id, message, code = -32000) => emit(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }));
+
+  // Writes a message from the server to the client, and remembers a request the server makes of it.
+  function deliver(text, sessionId, message = parse(text)) {
+    if (message && message.method !== undefined && message.id !== undefined) {
+      asked.set(JSON.stringify(message.id), sessionId);
+    }
+    emit(text);
+  }
 
   // Sends one request and resolves with the response once its headers arrive. `sessionId` is null for
   // a request that must not carry a session.
@@ -205,14 +222,20 @@ function run({ url, token }) {
   }
 
   // Opens the listening stream for the current session and keeps it open. Resolves when the stream is
-  // open, when the server refuses it, or after LISTEN_WAIT_MS, whichever is first.
+  // open, or when the first attempt was refused or failed. A server that accepts the connection and
+  // then never answers would hold every request back, so the wait ends after LISTEN_WAIT_MS as well.
+  // That is not the stream being open: until it is, the server itself refuses a call that needs an
+  // approval, and other calls work.
   function listen() {
     stopListening();
     const mine = { session, attempt: 0 };
     listening = mine;
     const current = () => listening === mine && !closing;
     return new Promise((resolve) => {
-      const wait = setTimeout(resolve, LISTEN_WAIT_MS);
+      const wait = setTimeout(() => {
+        log('the listening stream is not open yet; the server refuses a call that needs an approval until it is');
+        resolve();
+      }, LISTEN_WAIT_MS);
       const settled = () => {
         clearTimeout(wait);
         resolve();
@@ -230,7 +253,7 @@ function run({ url, token }) {
           if (res.statusCode === 200) {
             mine.attempt = 0;
             settled();
-            await consume(res, emit);
+            await consume(res, (text) => deliver(text, mine.session));
           } else {
             // 404 is a session the server forgot; the next request starts a new one. 405 is a server
             // that has no listening stream. Neither gets better by asking again.
@@ -296,24 +319,23 @@ function run({ url, token }) {
       return;
     }
     const isRequest = message.method !== undefined && message.id !== undefined;
+    const isResponse = message.method === undefined && message.id !== undefined;
     const isInitialize = message.method === 'initialize';
     const isInitialized = message.method === 'notifications/initialized';
     let answered = false;
-    const relay = (text) => {
-      if (isRequest && !answered) {
-        const reply = parse(text);
-        if (reply && reply.id === message.id && reply.method === undefined) {
-          answered = true;
-          if (isInitialize) protocolVersion = reply.result?.protocolVersion;
-        }
+    const relay = (sessionId) => (text) => {
+      const reply = parse(text);
+      if (isRequest && !answered && reply && reply.id === message.id && reply.method === undefined) {
+        answered = true;
+        if (isInitialize) protocolVersion = reply.result?.protocolVersion;
       }
-      emit(text);
+      deliver(text, sessionId, reply);
     };
     const attempt = async (sessionId) => {
       const res = await request('POST', line, sessionId);
       // Set before the answer is written, so that the client's next message already carries it.
       if (isInitialize && res.statusCode === 200) session = res.headers['mcp-session-id'];
-      return consume(res, relay);
+      return consume(res, relay(isInitialize ? session : sessionId));
     };
 
     if (isInitialize) {
@@ -321,6 +343,7 @@ function run({ url, token }) {
       session = undefined;
       protocolVersion = undefined;
       handshake = message;
+      asked.clear();
     }
     // A session is usable once its listening stream is open: until then the server refuses a call that
     // needs an approval, because it has nowhere to send the prompt. The client's first requests arrive
@@ -334,16 +357,38 @@ function run({ url, token }) {
       });
     }
     let used = isInitialize ? null : session;
+    if (isResponse) {
+      // An answer goes to the session that asked, and only once. Every session numbers its requests
+      // from 1, so an answer that reached another session could approve a different operation there.
+      const key = JSON.stringify(message.id);
+      if (!asked.has(key)) {
+        log(`dropped a response to request ${key}, which the server did not send or has had answered`);
+        return;
+      }
+      used = asked.get(key);
+      asked.delete(key);
+    }
     let problem;
+    let orphaned = false;
     try {
       let reply = await attempt(used ?? null);
       // A client response is not retried: the request it answers belonged to the session that is gone.
       if (reply.status === 404 && used && message.method !== undefined && handshake) {
-        await renew(used);
-        used = session;
-        reply = await attempt(used ?? null);
+        if ([...asked.values()].includes(used)) {
+          // The client still shows a prompt from the session that is gone. With a new session in place,
+          // its answer would have nowhere right to go, so the bridge stops and the client starts over.
+          orphaned = true;
+        } else {
+          await renew(used);
+          used = session;
+          reply = await attempt(used ?? null);
+        }
       }
-      if (reply.status === 200 && !reply.whole) {
+      if (orphaned) {
+        problem = `The ClusterControl MCP server at ${where} no longer knows this session, and a prompt it `
+          + 'sent is still open. An answer to that prompt must not reach a new session, so the bridge stops '
+          + 'here. Reconnect the server from /mcp.';
+      } else if (reply.status === 200 && !reply.whole) {
         problem = `The connection to the ClusterControl MCP server at ${where} was lost before it answered.`;
       } else if (reply.status === 200 || reply.status === 202 || reply.status === 204) {
         if (isInitialized) await listen();
@@ -358,17 +403,19 @@ function run({ url, token }) {
     } finally {
       release?.();
     }
-    if (problem === undefined || answered) return;
-    if (isRequest) fail(message.id, problem);
-    else log(problem);
+    if (problem !== undefined && !answered) {
+      if (isRequest) fail(message.id, problem);
+      else log(problem);
+    }
+    if (orphaned) close(1);
   }
 
-  async function close() {
+  async function close(code = 0) {
     if (closing) return;
     closing = true;
     stopListening();
     await Promise.race([Promise.allSettled([...inFlight]), sleep(CLOSE_WAIT_MS)]);
-    if (session) {
+    if (session && code === 0) {
       try {
         const res = await Promise.race([request('DELETE', undefined, session), sleep(CLOSE_WAIT_MS)]);
         res?.resume();
@@ -377,7 +424,7 @@ function run({ url, token }) {
       }
     }
     // The callback runs once everything written before it has been handed to the pipe.
-    process.stdout.write('', () => process.exit(0));
+    process.stdout.write('', () => process.exit(code));
   }
 
   log(`forwarding to ${where}`);
@@ -386,8 +433,8 @@ function run({ url, token }) {
       + 'network unencrypted. Use an SSH tunnel or an https:// URL.');
   }
   process.stdout.on('error', () => process.exit(0));
-  process.on('SIGTERM', close);
-  process.on('SIGINT', close);
+  process.on('SIGTERM', () => close());
+  process.on('SIGINT', () => close());
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
   lines.on('line', (line) => {
     if (!line.trim()) return;
@@ -395,7 +442,7 @@ function run({ url, token }) {
     inFlight.add(work);
     work.finally(() => inFlight.delete(work));
   });
-  lines.on('close', close);
+  lines.on('close', () => close());
 }
 
 const settings = readSettings();

@@ -109,7 +109,12 @@ covers the setup.
   Start Claude Code with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`.
 - **Fewer tools than expected:** the server's profile (`MCP_PROFILE`) or read-only mode limits what it lists.
 
-After `cmon-mcp` restarts there is nothing to do: the bridge starts a new session with the next request.
+- **"a prompt it sent is still open ... Reconnect the server from /mcp":** `cmon-mcp` restarted while an
+  approval prompt was waiting for your answer. The bridge stops, so that the answer cannot reach a new
+  session and approve something else. Reconnect the server from `/mcp` and ask again.
+
+After any other `cmon-mcp` restart there is nothing to do: the bridge starts a new session with the next
+request.
 
 ## Support
 
