@@ -51,9 +51,25 @@ LONGEST_APPROVAL_WINDOW_SEC = 30 * 60
 # LOCAL_CODE_FILE_TYPE), and it refuses a server whose url the user supplies. A plugin named here is
 # held to that, so that a change the directory would refuse fails here first.
 DIRECTORY_PLUGINS = {"clustercontrol-mcp-setup"}
+# What such a plugin may hold at its top level, and what its manifest may say, and nothing else. Whatever
+# makes Claude Code run something (a server file, hooks, monitors, bin/, a language server, options for
+# one) is on neither list, so it is refused without having to be named here.
+SKILLS_ONLY_ENTRIES = {".claude-plugin", "skills", "README.md", "LICENSE", ".gitignore"}
+SKILLS_ONLY_MANIFEST_KEYS = {
+    "$schema", "name", "displayName", "version", "description", "author", "homepage", "repository", "license",
+    "keywords", "icon", "documentationUrl", "supportUrl", "privacyPolicyUrl", "termsOfServiceUrl",
+}
 TEXT_SUFFIXES = {".md", ".txt", ".json", ".yaml", ".yml"}
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico"}
 TEXT_NAMES = {"LICENSE", ".gitignore"}
+# How a file of each image type begins. A file named as an image that begins otherwise is something else.
+IMAGE_STARTS = {
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF87a", b"GIF89a"),
+    ".webp": (b"RIFF",),
+    ".ico": (b"\x00\x00\x01\x00",),
+}
 PACKAGE_MANAGER_FILES = {
     "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-workspace.yaml", "pnpm-lock.yaml",
     "yarn.lock", ".npmrc", "bun.lock", "bun.lockb", "bunfig.toml", "uv.toml", "uv.lock", "pyproject.toml",
@@ -111,30 +127,76 @@ def marketplace_folders(path, codex):
     return folders
 
 
+def skill_description(text):
+    """The description in a skill's front matter as one string, or "" when it has none."""
+    lines = [line.rstrip() for line in text.split("\n")]
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return ""
+    front = lines[1:lines.index("---", 1)]
+    for at, line in enumerate(front):
+        if not line.startswith("description:"):
+            continue
+        value = line[len("description:"):].strip()
+        if value == "" or value[0] in "|>":
+            # A value on the lines below: they are indented, and the next key is not.
+            block = []
+            for more in front[at + 1:]:
+                if more.strip() and not more.startswith((" ", "\t")):
+                    break
+                block.append(more.strip())
+            value = " ".join(part for part in block if part)
+        return value.strip("\"'").strip()
+    return ""
+
+
+def is_image(suffix, data):
+    if not data.startswith(IMAGE_STARTS[suffix]):
+        return False
+    return suffix != ".webp" or data[8:12] == b"WEBP"
+
+
 def check_directory_plugin(where, folder, manifest):
     """Hold a plugin to what the directory takes from an organization that is not Verified."""
-    if (folder / ".mcp.json").exists() or "mcpServers" in manifest or "lspServers" in manifest:
+    if (folder / ".mcp.json").exists() or "mcpServers" in manifest:
         problem(f"{where}: must not define an MCP server; the directory refuses one that runs on the user's "
                 f"computer, and a ClusterControl site's own server has no public address to name")
     if (folder / "hooks").exists() or "hooks" in manifest:
         problem(f"{where}: must not have hooks; a hook runs a command on the user's computer")
+    icon = manifest.get("icon")
+    icon_path = (folder / icon).resolve() if isinstance(icon, str) else None
+    entries = set(SKILLS_ONLY_ENTRIES)
+    if icon_path is not None and icon_path.parent == folder:
+        entries.add(icon_path.name)
+    for entry in sorted(folder.iterdir()):
+        if entry.name not in entries:
+            problem(f"{where}: {entry.name} is not part of a skills-only plugin, which holds only "
+                    f"{', '.join(sorted(entries))}")
+    for key in sorted(set(manifest) - SKILLS_ONLY_MANIFEST_KEYS):
+        problem(f"{where}: manifest key {key!r} does not belong in a skills-only plugin; only the fields that "
+                f"describe the plugin and its listing do")
     skills = sorted((folder / "skills").glob("*/SKILL.md"))
     if not skills:
         problem(f"{where}: needs at least one skill, skills/<name>/SKILL.md")
     for skill in skills:
-        text = skill.read_text(encoding="utf-8", errors="replace")
-        front = text.split("---", 2)[1] if text.startswith("---") and text.count("---") >= 2 else ""
-        if not re.search(r"^description:\s*\S", front, re.M):
+        if not skill_description(skill.read_text(encoding="utf-8", errors="replace")):
             problem(f"{where}: {skill.relative_to(folder)} needs a description in its front matter")
-    icon = manifest.get("icon")
-    icon_path = (folder / icon).resolve() if isinstance(icon, str) else None
-    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+    for path in sorted(p for p in folder.rglob("*") if p.is_symlink() or p.is_file()):
         rel = path.relative_to(folder)
+        if path.is_symlink():
+            problem(f"{where}: {rel} is a symbolic link; the directory takes regular files only")
+            continue
         suffix = path.suffix.lower()
+        data = path.read_bytes()
         if path.name in PACKAGE_MANAGER_FILES:
             problem(f"{where}: {rel} is a package manager file, which the directory refuses")
             continue
-        if suffix in IMAGE_SUFFIXES:
+        # Whatever its name says, a file that starts with #! is a program.
+        if data.startswith(b"#!"):
+            problem(f"{where}: {rel} starts with #!, which marks a program")
+            continue
+        if suffix in IMAGE_STARTS:
+            if not is_image(suffix, data):
+                problem(f"{where}: {rel} is not the image its name says")
             continue
         # The icon may be an SVG, because an SVG is text. The directory refuses any other one.
         is_svg_icon = suffix == ".svg" and path.resolve() == icon_path
@@ -142,9 +204,6 @@ def check_directory_plugin(where, folder, manifest):
             problem(f"{where}: {rel} has a file type the directory refuses; it takes Markdown, text, JSON, YAML, "
                     f"and PNG, JPEG, GIF, WebP or ICO images")
             continue
-        data = path.read_bytes()
-        if data.startswith(b"#!"):
-            problem(f"{where}: {rel} starts with #!, which marks a program")
         if b"\x00" in data:
             problem(f"{where}: {rel} holds a NUL byte, so it is not text")
         else:

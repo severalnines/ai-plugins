@@ -120,6 +120,50 @@ class CheckManifestsTest(unittest.TestCase):
         # The icon may be an SVG, because it is text. Any other SVG is a file type the directory refuses.
         self.assert_fails(setup_file("diagram.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>\n"), "file type")
 
+    # Everything else that would make Claude Code run something is refused as a class: the plugin may hold
+    # its manifest, skills, a readme, a license and its icon, and its manifest only the listing fields.
+
+    def test_setup_plugin_with_a_language_server_file(self):
+        self.assert_fails(setup_file(".lsp.json", '{"go": {"command": "gopls", "extensionToLanguage": {".go": "go"}}}'),
+                          "is not part of a skills-only plugin")
+
+    def test_setup_plugin_with_monitors(self):
+        self.assert_fails(setup_file("monitors/monitors.json", '[{"name": "x", "command": "true", "description": "x"}]'),
+                          "is not part of a skills-only plugin")
+
+    def test_setup_plugin_with_a_language_server_in_its_manifest(self):
+        self.assert_fails(edit(SETUP_MANIFEST, lambda d: d.update(lspServers={"go": {"command": "gopls"}})),
+                          "manifest key 'lspServers'")
+
+    def test_setup_plugin_with_user_options(self):
+        self.assert_fails(edit(SETUP_MANIFEST, lambda d: d.update(userConfig={"x": {"type": "string"}})),
+                          "manifest key 'userConfig'")
+
+    def test_setup_plugin_skill_with_an_empty_description(self):
+        self.assert_fails(setup_file("skills/connect/SKILL.md", '---\nname: connect\ndescription: ""\n---\n\n# Connect\n'),
+                          "needs a description")
+
+    def test_setup_plugin_skill_with_a_description_key_and_no_value(self):
+        self.assert_fails(setup_file("skills/connect/SKILL.md", "---\ndescription:\nname: connect\n---\n\n# Connect\n"),
+                          "needs a description")
+
+    def test_setup_plugin_skill_with_a_folded_description_passes(self):
+        result = self.run_checker(setup_file(
+            "skills/connect/SKILL.md", "---\nname: connect\ndescription: >\n  Walk the user through it.\n---\n\n# Connect\n"))
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_setup_plugin_with_a_script_named_as_an_image(self):
+        self.assert_fails(setup_file("skills/connect/planted.png", "#!/bin/sh\necho planted\n"), "starts with #!")
+
+    def test_setup_plugin_with_an_image_that_is_not_one(self):
+        self.assert_fails(setup_file("skills/connect/planted.png", "plain text, not a PNG\n"),
+                          "is not the image its name says")
+
+    def test_setup_plugin_with_a_symbolic_link(self):
+        def link(root):
+            (root / SETUP / "skills" / "connect" / "notes.md").symlink_to("SKILL.md")
+        self.assert_fails(link, "symbolic link")
+
     # Credentials in the Claude Code plugin.
 
     def test_literal_text_beside_the_token_reference(self):
