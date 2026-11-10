@@ -7,9 +7,12 @@
 // Run: node --test tools/bridge.test.mjs
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
@@ -37,12 +40,13 @@ async function until(what, condition, ms = 5000) {
 
 // A fake cmon-mcp. `post(entry, res, state)` may answer a POST itself and return true; everything else
 // gets the default: a session on initialize, 202 for notifications and client responses, an echo for
-// requests, an open stream for GET, and 404 for a session listed in state.stale.
-async function mcpServer(t, { post, sessionIds = ['session-A', 'session-B', 'session-C'] } = {}) {
+// requests, an open stream for GET, and 404 for a session listed in state.stale. With `tls`, a key and
+// certificate, it serves https.
+async function mcpServer(t, { post, tls, sessionIds = ['session-A', 'session-B', 'session-C'] } = {}) {
   const requests = [];
   const sockets = new Set();
   const state = { streams: [], initializes: 0, stale: new Set() };
-  const server = http.createServer((req, res) => {
+  const listener = (req, res) => {
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
@@ -86,7 +90,8 @@ async function mcpServer(t, { post, sessionIds = ['session-A', 'session-B', 'ses
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { echoed: message.method } })}\n`);
     });
-  });
+  };
+  const server = tls ? https.createServer(tls, listener) : http.createServer(listener);
   server.on('connection', (socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
@@ -96,7 +101,7 @@ async function mcpServer(t, { post, sessionIds = ['session-A', 'session-B', 'ses
     for (const socket of sockets) socket.destroy();
     server.close(resolve);
   }));
-  return { url: `http://127.0.0.1:${server.address().port}/mcp`, requests, state };
+  return { url: `${tls ? 'https' : 'http'}://127.0.0.1:${server.address().port}/mcp`, requests, state };
 }
 
 function startBridge(t, url, { token = TOKEN, env = {} } = {}) {
@@ -310,6 +315,48 @@ test('answers a request with an error when the server cannot be reached', async 
   bridge.send({ jsonrpc: '2.0', id: 2, method: 'ping' });
   assert.equal((await bridge.next()).id, 2);
   assert.equal(bridge.messages.length, 2);
+});
+
+test('reaches a TLS endpoint whose certificate a private CA signed, and says how to trust one', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'bridge-tls-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const openssl = (...args) => spawnSync('openssl', args, { cwd: dir, encoding: 'utf8' });
+  if (openssl('version').status !== 0) {
+    t.skip('openssl is not installed');
+    return;
+  }
+  // A CA of our own and a server certificate it signs, as a controller with a private CA has. A
+  // certificate that signs itself fails differently, and is not what the reference manual describes.
+  writeFileSync(join(dir, 'leaf.ext'), 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\n');
+  for (const step of [
+    ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.pem', '-days', '1',
+      '-subj', '/CN=bridge-test-ca', '-addext', 'basicConstraints=critical,CA:TRUE'],
+    ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-out', 'leaf.csr', '-subj', '/CN=127.0.0.1'],
+    ['x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial',
+      '-out', 'leaf.pem', '-days', '1', '-extfile', 'leaf.ext'],
+  ]) {
+    const done = openssl(...step);
+    assert.equal(done.status, 0, done.stderr);
+  }
+  const server = await mcpServer(t, {
+    tls: { key: readFileSync(join(dir, 'leaf.key')), cert: readFileSync(join(dir, 'leaf.pem')) },
+  });
+  assert.match(server.url, /^https:/);
+
+  const trusting = startBridge(t, server.url, { env: { NODE_EXTRA_CA_CERTS: join(dir, 'ca.pem') } });
+  await handshake(trusting);
+  await until('the listening stream', () => server.state.streams.length === 1);
+  trusting.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
+  assert.deepEqual((await trusting.next()).result, { echoed: 'tools/list' });
+
+  const requestsBefore = server.requests.length;
+  const untrusting = startBridge(t, server.url);
+  untrusting.send(INIT);
+  const refused = await untrusting.next();
+  assert.equal(refused.id, 1);
+  assert.match(refused.error.message, /certificate was not trusted/);
+  assert.match(refused.error.message, /NODE_EXTRA_CA_CERTS/);
+  assert.equal(server.requests.length, requestsBefore, 'nothing, and so no token, was sent to an untrusted server');
 });
 
 test('reports any other HTTP status with what the server said', async (t) => {

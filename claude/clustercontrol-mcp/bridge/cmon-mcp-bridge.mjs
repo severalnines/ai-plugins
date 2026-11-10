@@ -193,7 +193,9 @@ function run({ url, token }) {
     let hint = '';
     if (code === 'ECONNREFUSED') {
       hint = ' Check that the SSH tunnel is open, that cmon-mcp is running, and that the URL is right.';
-    } else if (/CERT|SELF_SIGNED|ERR_TLS/.test(code)) {
+    } else if (/CERT|SELF_SIGNED|UNABLE_TO_|HOSTNAME_MISMATCH|ERR_TLS/.test(code)) {
+      // Node's names for a certificate it would not accept, such as UNABLE_TO_VERIFY_LEAF_SIGNATURE for
+      // one signed by a CA it does not know.
       hint = ' The server certificate was not trusted. For a private CA, start Claude Code with '
         + 'NODE_EXTRA_CA_CERTS=/path/to/ca.pem.';
     }
