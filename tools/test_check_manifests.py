@@ -44,6 +44,22 @@ def claude_header(value):
     return claude_server(lambda s: s["headers"].update(Authorization=value))
 
 
+SETUP = "claude/clustercontrol-mcp-setup"
+SETUP_MANIFEST = f"{SETUP}/.claude-plugin/plugin.json"
+
+
+def setup_file(rel, content):
+    """Plant a file in the setup plugin; `content` is text or bytes."""
+    def apply(root):
+        path = root / SETUP / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8")
+    return apply
+
+
 class CheckManifestsTest(unittest.TestCase):
     def run_checker(self, plant):
         with tempfile.TemporaryDirectory() as tmp:
@@ -61,6 +77,48 @@ class CheckManifestsTest(unittest.TestCase):
     def test_unchanged_repository_passes(self):
         result = self.run_checker(lambda root: None)
         self.assertEqual(result.returncode, 0, result.stdout)
+
+    # The setup plugin is the one submitted to Anthropic's plugin directory. From an organization that is
+    # not Verified, the directory refuses a plugin with a server that runs on the user's computer, with
+    # a program of any kind, or with a file that is not text or an image. Each case below was a refusal
+    # there, or would be one.
+
+    def test_setup_plugin_with_a_server_file(self):
+        self.assert_fails(setup_file(".mcp.json", '{"mcpServers": {"x": {"command": "node", "args": ["x.mjs"]}}}'),
+                          "must not define an MCP server")
+
+    def test_setup_plugin_with_a_server_in_its_manifest(self):
+        self.assert_fails(edit(SETUP_MANIFEST, lambda d: d.update(mcpServers={"x": {"url": "https://cc.example.com/mcp"}})),
+                          "must not define an MCP server")
+
+    def test_setup_plugin_with_hooks(self):
+        self.assert_fails(setup_file("hooks/hooks.json", '{"hooks": {}}'), "must not have hooks")
+
+    def test_setup_plugin_with_a_script(self):
+        self.assert_fails(setup_file("scripts/check.sh", "echo planted\n"), "file type")
+
+    def test_setup_plugin_with_a_shebang_in_a_text_file(self):
+        self.assert_fails(setup_file("skills/connect/notes.md", "#!/bin/sh\necho planted\n"), "starts with #!")
+
+    def test_setup_plugin_with_a_binary_named_as_text(self):
+        self.assert_fails(setup_file("skills/connect/notes.md", b"planted\x00binary"), "NUL byte")
+
+    def test_setup_plugin_with_text_that_is_not_utf8(self):
+        self.assert_fails(setup_file("skills/connect/notes.md", b"caf\xe9\n"), "not UTF-8")
+
+    def test_setup_plugin_with_a_package_manager_file(self):
+        self.assert_fails(setup_file("package.json", '{"name": "planted"}'), "package manager")
+
+    def test_setup_plugin_without_a_skill(self):
+        self.assert_fails(lambda root: shutil.rmtree(root / SETUP / "skills"), "needs at least one skill")
+
+    def test_setup_plugin_skill_without_a_description(self):
+        self.assert_fails(setup_file("skills/connect/SKILL.md", "---\nname: connect\n---\n\n# Connect\n"),
+                          "needs a description")
+
+    def test_setup_plugin_with_a_second_svg(self):
+        # The icon may be an SVG, because it is text. Any other SVG is a file type the directory refuses.
+        self.assert_fails(setup_file("diagram.svg", "<svg xmlns='http://www.w3.org/2000/svg'/>\n"), "file type")
 
     # Credentials in the Claude Code plugin.
 

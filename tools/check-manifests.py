@@ -17,7 +17,9 @@ nothing else checks that the two plugins of one product stay in step, so this sc
   http only to loopback;
 - the Codex server reads its token from an environment variable and carries no literal token, no
   `http_headers` (sent as written) and no `headers` block (ignored by Codex, so a token there would
-  silently not be sent).
+  silently not be sent);
+- a plugin submitted to Anthropic's plugin directory holds only what the directory takes from an
+  organization that is not Verified: skills, no server, no hooks, and no file that is not text or an image.
 
 Exit status: 0 when every check passes, 1 when any fails.
 """
@@ -42,6 +44,20 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # MCP_APPROVAL_TTL accepts 1m to 30m. A client that gives up first cancels the approval request.
 LONGEST_APPROVAL_WINDOW_SEC = 30 * 60
+
+# The plugins submitted to Anthropic's plugin directory. From an organization that is not Verified, the
+# directory refuses a plugin that defines a server running on the user's computer, or that holds a
+# program or any file that is not text or an image (its findings LOCAL_CODE_MCP_SERVER and
+# LOCAL_CODE_FILE_TYPE), and it refuses a server whose url the user supplies. A plugin named here is
+# held to that, so that a change the directory would refuse fails here first.
+DIRECTORY_PLUGINS = {"clustercontrol-mcp-setup"}
+TEXT_SUFFIXES = {".md", ".txt", ".json", ".yaml", ".yml"}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico"}
+TEXT_NAMES = {"LICENSE", ".gitignore"}
+PACKAGE_MANAGER_FILES = {
+    "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-workspace.yaml", "pnpm-lock.yaml",
+    "yarn.lock", ".npmrc", "bun.lock", "bun.lockb", "bunfig.toml", "uv.toml", "uv.lock", "pyproject.toml",
+}
 
 problems = []
 
@@ -95,14 +111,60 @@ def marketplace_folders(path, codex):
     return folders
 
 
+def check_directory_plugin(where, folder, manifest):
+    """Hold a plugin to what the directory takes from an organization that is not Verified."""
+    if (folder / ".mcp.json").exists() or "mcpServers" in manifest or "lspServers" in manifest:
+        problem(f"{where}: must not define an MCP server; the directory refuses one that runs on the user's "
+                f"computer, and a ClusterControl site's own server has no public address to name")
+    if (folder / "hooks").exists() or "hooks" in manifest:
+        problem(f"{where}: must not have hooks; a hook runs a command on the user's computer")
+    skills = sorted((folder / "skills").glob("*/SKILL.md"))
+    if not skills:
+        problem(f"{where}: needs at least one skill, skills/<name>/SKILL.md")
+    for skill in skills:
+        text = skill.read_text(encoding="utf-8", errors="replace")
+        front = text.split("---", 2)[1] if text.startswith("---") and text.count("---") >= 2 else ""
+        if not re.search(r"^description:\s*\S", front, re.M):
+            problem(f"{where}: {skill.relative_to(folder)} needs a description in its front matter")
+    icon = manifest.get("icon")
+    icon_path = (folder / icon).resolve() if isinstance(icon, str) else None
+    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        rel = path.relative_to(folder)
+        suffix = path.suffix.lower()
+        if path.name in PACKAGE_MANAGER_FILES:
+            problem(f"{where}: {rel} is a package manager file, which the directory refuses")
+            continue
+        if suffix in IMAGE_SUFFIXES:
+            continue
+        # The icon may be an SVG, because an SVG is text. The directory refuses any other one.
+        is_svg_icon = suffix == ".svg" and path.resolve() == icon_path
+        if suffix not in TEXT_SUFFIXES and path.name not in TEXT_NAMES and not is_svg_icon:
+            problem(f"{where}: {rel} has a file type the directory refuses; it takes Markdown, text, JSON, YAML, "
+                    f"and PNG, JPEG, GIF, WebP or ICO images")
+            continue
+        data = path.read_bytes()
+        if data.startswith(b"#!"):
+            problem(f"{where}: {rel} starts with #!, which marks a program")
+        if b"\x00" in data:
+            problem(f"{where}: {rel} holds a NUL byte, so it is not text")
+        else:
+            try:
+                data.decode("utf-8")
+            except UnicodeDecodeError:
+                problem(f"{where}: {rel} is not UTF-8 text")
+
+
 def check_claude(name, folder):
     manifest = load_json(folder / ".claude-plugin" / "plugin.json")
-    servers = servers_of(load_json(folder / ".mcp.json"))
     if not isinstance(manifest, dict):
         return None, {}
     where = f"claude/{name}"
     if manifest.get("name") != name:
         problem(f"{where}: plugin.json name {manifest.get('name')!r} differs from the marketplace entry")
+    if name in DIRECTORY_PLUGINS:
+        check_directory_plugin(where, folder, manifest)
+        return manifest.get("version"), {}
+    servers = servers_of(load_json(folder / ".mcp.json"))
     options = manifest.get("userConfig", {})
     for server, cfg in servers.items():
         # Whole-value matches, not substring tests: text beside a reference is a literal shipped in the repo.

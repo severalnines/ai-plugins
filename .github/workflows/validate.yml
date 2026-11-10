@@ -19,6 +19,8 @@ jobs:
         run: claude plugin validate . --strict
       - name: Claude Code plugin, with the directory's checks
         run: claude plugin validate ./claude/clustercontrol-mcp --strict --profile directory
+      - name: Setup guide plugin, with the directory's checks
+        run: claude plugin validate ./claude/clustercontrol-mcp-setup --strict --profile directory
       - name: Cross-tool consistency
         run: python3 tools/check-manifests.py
       - name: Consistency checker catches planted defects
