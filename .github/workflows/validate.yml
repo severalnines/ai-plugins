@@ -23,3 +23,17 @@ jobs:
         run: python3 tools/check-manifests.py
       - name: Consistency checker catches planted defects
         run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+  bridge:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The plugin's README promises Node.js 18 or later.
+        node: ['18', '20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Bridge tests
+        run: node --test tools/bridge.test.mjs
