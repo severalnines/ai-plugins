@@ -25,6 +25,8 @@ jobs:
         run: python3 -m unittest discover -s tools -p 'test_*.py' -v
   bridge:
     runs-on: ubuntu-latest
+    # The tests take seconds. A run that does not end is a failure, not something to wait six hours for.
+    timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:

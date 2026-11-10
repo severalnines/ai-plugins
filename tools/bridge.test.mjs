@@ -25,6 +25,8 @@ const INIT = {
   params: { protocolVersion: '2025-06-18', capabilities: { elicitation: {} }, clientInfo: { name: 'test', version: '0' } },
 };
 const INITIALIZED = { jsonrpc: '2.0', method: 'notifications/initialized' };
+// The names of the tests in which the bridge printed the token; see startBridge and the last test.
+const leaks = [];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -132,8 +134,10 @@ function startBridge(t, url, { token = TOKEN, env = {} } = {}) {
   t.after(async () => {
     child.kill('SIGKILL');
     await exited;
-    // Whatever a test did, the token must not have reached either stream.
-    if (token) assert.ok(!stdout.includes(token) && !stderr.includes(token), 'the token was printed');
+    // Whatever a test did, the token must not have reached either stream. A leak is recorded here and
+    // fails the last test in this file. Throwing here instead would skip the hook that closes the fake
+    // server, and its open socket would keep the run from ever ending.
+    if (token && (stdout.includes(token) || stderr.includes(token))) leaks.push(t.name);
   });
   return {
     exited,
@@ -549,4 +553,9 @@ test('uses no client with a timeout of its own', () => {
   const source = readFileSync(BRIDGE, 'utf8');
   assert.doesNotMatch(source, /\bfetch\s*\(/);
   assert.doesNotMatch(source, /\.setTimeout\s*\(/);
+});
+
+// Keep this test last: it reports what every test above recorded.
+test('never printed the token, in any test above', () => {
+  assert.deepEqual(leaks, []);
 });
