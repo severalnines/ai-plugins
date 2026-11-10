@@ -17,7 +17,9 @@ nothing else checks that the two plugins of one product stay in step, so this sc
   http only to loopback;
 - the Codex server reads its token from an environment variable and carries no literal token, no
   `http_headers` (sent as written) and no `headers` block (ignored by Codex, so a token there would
-  silently not be sent).
+  silently not be sent);
+- a plugin submitted to Anthropic's plugin directory holds only what the directory takes from an
+  organization that is not Verified: skills, no server, no hooks, and no file that is not text or an image.
 
 Exit status: 0 when every check passes, 1 when any fails.
 """
@@ -42,6 +44,41 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # MCP_APPROVAL_TTL accepts 1m to 30m. A client that gives up first cancels the approval request.
 LONGEST_APPROVAL_WINDOW_SEC = 30 * 60
+
+# The plugins submitted to Anthropic's plugin directory. From an organization that is not Verified, the
+# directory refuses a plugin that defines a server running on the user's computer, or that holds a
+# program or any file that is not text or an image (its findings LOCAL_CODE_MCP_SERVER and
+# LOCAL_CODE_FILE_TYPE), and it refuses a server whose url the user supplies. A plugin named here is
+# held to that, so that a change the directory would refuse fails here first.
+DIRECTORY_PLUGINS = {"clustercontrol-mcp-setup"}
+# What such a plugin may hold at its top level, and what its manifest may say, and nothing else. Whatever
+# makes Claude Code run something (a server file, hooks, monitors, bin/, a language server, options for
+# one) is on neither list, so it is refused without having to be named here.
+SKILLS_ONLY_ENTRIES = {".claude-plugin", "skills", "README.md", "LICENSE", ".gitignore"}
+SKILLS_ONLY_MANIFEST_KEYS = {
+    "$schema", "name", "displayName", "version", "description", "author", "homepage", "repository", "license",
+    "keywords", "icon", "documentationUrl", "supportUrl", "privacyPolicyUrl", "termsOfServiceUrl",
+}
+# What a skill's front matter may set in such a plugin. Other keys can run a command by themselves (hooks)
+# or approve tools in advance (allowed-tools), and none is needed to describe a skill.
+SKILLS_ONLY_FRONT_MATTER_KEYS = {"name", "description"}
+# In a skill, !`command` runs the command when the skill loads and puts its output into the text.
+COMMAND_LINE_MARK = "!`"
+TEXT_SUFFIXES = {".md", ".txt", ".json", ".yaml", ".yml"}
+TEXT_NAMES = {"LICENSE", ".gitignore"}
+# How a file of each image type begins. A file named as an image that begins otherwise is something else.
+IMAGE_STARTS = {
+    ".png": (b"\x89PNG\r\n\x1a\n",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF87a", b"GIF89a"),
+    ".webp": (b"RIFF",),
+    ".ico": (b"\x00\x00\x01\x00",),
+}
+PACKAGE_MANAGER_FILES = {
+    "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-workspace.yaml", "pnpm-lock.yaml",
+    "yarn.lock", ".npmrc", "bun.lock", "bun.lockb", "bunfig.toml", "uv.toml", "uv.lock", "pyproject.toml",
+}
 
 problems = []
 
@@ -95,14 +132,129 @@ def marketplace_folders(path, codex):
     return folders
 
 
+def front_matter(text):
+    """The lines of a skill's front matter, or [] when it has none."""
+    lines = [line.rstrip() for line in text.split("\n")]
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return []
+    return lines[1:lines.index("---", 1)]
+
+
+def front_matter_keys(text):
+    """The top-level keys of a skill's front matter: the lines that are not indented."""
+    return {line.split(":", 1)[0].strip() for line in front_matter(text)
+            if line.strip() and not line.startswith((" ", "\t", "#", "-")) and ":" in line}
+
+
+def skill_description(text):
+    """The description in a skill's front matter as one string, or "" when it has none."""
+    front = front_matter(text)
+    for at, line in enumerate(front):
+        if not line.startswith("description:"):
+            continue
+        value = line[len("description:"):].strip()
+        if value == "" or value[0] in "|>":
+            # A value on the lines below: they are indented, and the next key is not.
+            block = []
+            for more in front[at + 1:]:
+                if more.strip() and not more.startswith((" ", "\t")):
+                    break
+                block.append(more.strip())
+            value = " ".join(part for part in block if part)
+        # What YAML reads as nothing, a list or a map is not a description, though it is not empty.
+        if value.lower() in ("null", "~") or value[:1] in ("[", "{"):
+            return ""
+        return value.strip("\"'").strip()
+    return ""
+
+
+def is_image(suffix, data):
+    if not data.startswith(IMAGE_STARTS[suffix]):
+        return False
+    return suffix != ".webp" or data[8:12] == b"WEBP"
+
+
+def check_directory_plugin(where, folder, manifest):
+    """Hold a plugin to what the directory takes from an organization that is not Verified."""
+    if (folder / ".mcp.json").exists() or "mcpServers" in manifest:
+        problem(f"{where}: must not define an MCP server; the directory refuses one that runs on the user's "
+                f"computer, and a ClusterControl site's own server has no public address to name")
+    if (folder / "hooks").exists() or "hooks" in manifest:
+        problem(f"{where}: must not have hooks; a hook runs a command on the user's computer")
+    icon = manifest.get("icon")
+    icon_path = (folder / icon).resolve() if isinstance(icon, str) else None
+    entries = set(SKILLS_ONLY_ENTRIES)
+    # The icon is the one entry the manifest can add, and only as an image file at the top of the plugin.
+    # A manifest that named a folder, or a file of another kind, as its icon would otherwise let it in.
+    if (icon_path is not None and icon_path.parent == folder and icon_path.is_file()
+            and not icon_path.is_symlink() and icon_path.suffix.lower() in {*IMAGE_STARTS, ".svg"}):
+        entries.add(icon_path.name)
+    for entry in sorted(folder.iterdir()):
+        if entry.name not in entries:
+            problem(f"{where}: {entry.name} is not part of a skills-only plugin, which holds only "
+                    f"{', '.join(sorted(entries))}")
+    for key in sorted(set(manifest) - SKILLS_ONLY_MANIFEST_KEYS):
+        problem(f"{where}: manifest key {key!r} does not belong in a skills-only plugin; only the fields that "
+                f"describe the plugin and its listing do")
+    skills = sorted((folder / "skills").glob("*/SKILL.md"))
+    if not skills:
+        problem(f"{where}: needs at least one skill, skills/<name>/SKILL.md")
+    for skill in skills:
+        text = skill.read_text(encoding="utf-8", errors="replace")
+        if not skill_description(text):
+            problem(f"{where}: {skill.relative_to(folder)} needs a description in its front matter")
+        for key in sorted(front_matter_keys(text) - SKILLS_ONLY_FRONT_MATTER_KEYS):
+            problem(f"{where}: {skill.relative_to(folder)} has front matter key {key!r}; in a skills-only plugin "
+                    f"a skill sets only {' and '.join(sorted(SKILLS_ONLY_FRONT_MATTER_KEYS))}, because other "
+                    f"keys can run a command or approve tools")
+    for path in sorted(p for p in folder.rglob("*") if p.is_symlink() or p.is_file()):
+        rel = path.relative_to(folder)
+        if path.is_symlink():
+            problem(f"{where}: {rel} is a symbolic link; the directory takes regular files only")
+            continue
+        suffix = path.suffix.lower()
+        data = path.read_bytes()
+        if path.name in PACKAGE_MANAGER_FILES:
+            problem(f"{where}: {rel} is a package manager file, which the directory refuses")
+            continue
+        # Whatever its name says, a file that starts with #! is a program.
+        if data.startswith(b"#!"):
+            problem(f"{where}: {rel} starts with #!, which marks a program")
+            continue
+        if suffix in IMAGE_STARTS:
+            if not is_image(suffix, data):
+                problem(f"{where}: {rel} is not the image its name says")
+            continue
+        # The icon may be an SVG, because an SVG is text. The directory refuses any other one.
+        is_svg_icon = suffix == ".svg" and path.resolve() == icon_path
+        if suffix not in TEXT_SUFFIXES and path.name not in TEXT_NAMES and not is_svg_icon:
+            problem(f"{where}: {rel} has a file type the directory refuses; it takes Markdown, text, JSON, YAML, "
+                    f"and PNG, JPEG, GIF, WebP or ICO images")
+            continue
+        if b"\x00" in data:
+            problem(f"{where}: {rel} holds a NUL byte, so it is not text")
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            problem(f"{where}: {rel} is not UTF-8 text")
+            continue
+        if rel.parts[0] == "skills" and COMMAND_LINE_MARK in text:
+            problem(f"{where}: {rel} holds a {COMMAND_LINE_MARK}command` line, which runs a command when the "
+                    f"skill loads")
+
+
 def check_claude(name, folder):
     manifest = load_json(folder / ".claude-plugin" / "plugin.json")
-    servers = servers_of(load_json(folder / ".mcp.json"))
     if not isinstance(manifest, dict):
         return None, {}
     where = f"claude/{name}"
     if manifest.get("name") != name:
         problem(f"{where}: plugin.json name {manifest.get('name')!r} differs from the marketplace entry")
+    if name in DIRECTORY_PLUGINS:
+        check_directory_plugin(where, folder, manifest)
+        return manifest.get("version"), {}
+    servers = servers_of(load_json(folder / ".mcp.json"))
     options = manifest.get("userConfig", {})
     for server, cfg in servers.items():
         # Whole-value matches, not substring tests: text beside a reference is a literal shipped in the repo.

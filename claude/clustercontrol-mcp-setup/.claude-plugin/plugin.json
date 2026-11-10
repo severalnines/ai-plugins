@@ -1,0 +1,18 @@
+{
+  "name": "clustercontrol-mcp-setup",
+  "displayName": "ClusterControl MCP Setup",
+  "version": "1.0.0",
+  "description": "A setup guide: Claude walks you through connecting Claude Code to the MCP server of your own ClusterControl, checks the connection with you, and helps when it fails.",
+  "author": {
+    "name": "Severalnines",
+    "url": "https://severalnines.com/"
+  },
+  "homepage": "https://severalnines.com/clustercontrol/",
+  "repository": "https://github.com/severalnines/ai-plugins",
+  "license": "Apache-2.0",
+  "keywords": ["clustercontrol", "database", "mysql", "mariadb", "galera", "postgresql", "dba", "setup"],
+  "icon": "./icon.svg",
+  "documentationUrl": "https://docs.severalnines.com/clustercontrol/latest/reference-manuals/clustercontrol-mcp/",
+  "supportUrl": "https://support.severalnines.com/hc/en-us",
+  "privacyPolicyUrl": "https://severalnines.com/privacy/"
+}

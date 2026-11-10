@@ -10,6 +10,11 @@
       "name": "clustercontrol-mcp",
       "source": "./claude/clustercontrol-mcp",
       "description": "Connect Claude Code to your ClusterControl MCP server to inspect, troubleshoot and operate your database clusters."
+    },
+    {
+      "name": "clustercontrol-mcp-setup",
+      "source": "./claude/clustercontrol-mcp-setup",
+      "description": "A setup guide: Claude walks you through connecting Claude Code to your ClusterControl MCP server and helps when the connection fails."
     }
   ]
 }
